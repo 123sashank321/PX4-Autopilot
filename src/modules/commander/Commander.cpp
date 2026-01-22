@@ -1520,6 +1520,9 @@ Commander::handle_command(const vehicle_command_s &cmd)
 		/* ignore commands that are handled by other parts of the system */
 		break;
 
+	case 31010: // MAV_CMD_USER_1 - handled by striker module, silently ignore
+		return false; // return false so no ack is sent from commander
+
 	default:
 		/* Warn about unsupported commands, this makes sense because only commands
 		 * to this component ID (or all) are passed by mavlink. */
