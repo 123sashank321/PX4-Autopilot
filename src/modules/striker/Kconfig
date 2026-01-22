@@ -1,0 +1,5 @@
+menuconfig MODULES_STRIKER
+	bool "striker"
+	default n
+	---help---
+		Enable support for strike target designation via MAV_CMD_USER_1
