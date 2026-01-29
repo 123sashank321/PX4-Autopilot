@@ -162,6 +162,14 @@ void getVehicleControlMode(uint8_t nav_state, uint8_t vehicle_type,
 
 		break;
 
+	case vehicle_status_s::NAVIGATION_STATE_STRIKE:
+		vehicle_control_mode.flag_control_auto_enabled = true;
+		vehicle_control_mode.flag_control_position_enabled = true; // Required for FWPC
+		vehicle_control_mode.flag_control_attitude_enabled = true;
+		vehicle_control_mode.flag_control_rates_enabled = true;
+		vehicle_control_mode.flag_control_allocation_enabled = true;
+		break;
+
 	case vehicle_status_s::NAVIGATION_STATE_AUTO_FOLLOW_TARGET:
 
 	// Follow Target supports RC adjustment, so disable auto control mode to disable

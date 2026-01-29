@@ -1833,6 +1833,24 @@ void Commander::run()
 			_status_changed = true;
 		}
 
+		// Check for active Strike
+		strike_target_s strike_target;
+		if (_strike_target_sub.copy(&strike_target)) {
+			if (strike_target.active && (strike_target.action_type == 0)) {
+				// Strike is active, switch to Strike nav_state
+				if (_vehicle_status.nav_state != vehicle_status_s::NAVIGATION_STATE_STRIKE) {
+					_user_mode_intention.change(vehicle_status_s::NAVIGATION_STATE_STRIKE,
+						ModeChangeSource::User);
+					PX4_INFO("Strike activated, switching to NAVIGATION_STATE_STRIKE");
+				}
+			} else if (_vehicle_status.nav_state == vehicle_status_s::NAVIGATION_STATE_STRIKE) {
+				// Strike was deactivated or aborted, return to loiter
+				_user_mode_intention.change(vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER,
+					ModeChangeSource::User);
+				PX4_INFO("Strike deactivated, switching to AUTO_LOITER");
+			}
+		}
+
 		modeManagementUpdate();
 
 		const hrt_abstime now = hrt_absolute_time();

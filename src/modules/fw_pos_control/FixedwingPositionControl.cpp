@@ -685,6 +685,16 @@ FixedwingPositionControl::set_control_mode_current(const hrt_abstime &now)
 		return; // do not publish the setpoint
 	}
 
+	if (_vehicle_status.nav_state == vehicle_status_s::NAVIGATION_STATE_STRIKE) {
+		_control_mode_current = FW_POSCTRL_MODE_STRIKE;
+		return;
+	}
+
+	if (_vehicle_status.nav_state == vehicle_status_s::NAVIGATION_STATE_STRIKE) {
+		_control_mode_current = FW_POSCTRL_MODE_STRIKE;
+		return;
+	}
+
 	FW_POSCTRL_MODE commanded_position_control_mode = _control_mode_current;
 
 	_skipping_takeoff_detection = false;
@@ -2738,6 +2748,11 @@ FixedwingPositionControl::Run()
 				control_backtransition_heading_hold();
 				break;
 			}
+
+		case FW_POSCTRL_MODE_STRIKE: {
+				control_strike(control_interval);
+				break;
+			}
 		}
 
 
@@ -2767,6 +2782,9 @@ FixedwingPositionControl::Run()
 				q.copyTo(_att_sp.q_d);
 
 				_att_sp.timestamp = hrt_absolute_time();
+
+				// Don't publish if Strike is active (FlightTask Strike controls attitude)
+
 				_attitude_sp_pub.publish(_att_sp);
 
 				// only publish status in full FW mode
@@ -3373,6 +3391,45 @@ fw_pos_control is the fixed-wing position controller.
 
 	return 0;
 }
+void FixedwingPositionControl::control_strike(const float control_interval)
+{
+	strike_target_s strike_target;
+	_strike_target_sub.copy(&strike_target);
+
+	matrix::Vector3f R(strike_target.x - _local_pos.x, strike_target.y - _local_pos.y, strike_target.z - _local_pos.z);
+	matrix::Vector3f V(-_local_pos.vx, -_local_pos.vy, -_local_pos.vz);
+
+	float R_mag = R.norm();
+	if (R_mag < 0.1f) R_mag = 0.1f;
+
+	float V_closing = -R.dot(V) / R_mag;
+	matrix::Vector3f omega = R.cross(V) / (R_mag * R_mag);
+	matrix::Vector3f R_unit = R.normalized();
+
+	// N = 4 (Pure ProNav)
+	matrix::Vector3f acc_pn = omega.cross(R_unit) * (4.0f * V_closing);
+
+	float a_y = acc_pn(1);
+	float a_z = acc_pn(2);
+
+	float roll = atan2f(a_y, 9.81f);
+	roll = constrain(roll, -radians(45.0f), radians(45.0f));
+
+	float pitch = -atan2f(a_z, 15.0f);
+	pitch = constrain(pitch, -radians(30.0f), radians(30.0f));
+
+	float yaw = atan2f(R(1), R(0));
+
+	const Quatf q(Eulerf(roll, pitch, yaw));
+	q.copyTo(_att_sp.q_d);
+
+	_att_sp.thrust_body[0] = 0.8f;
+
+	_att_sp.yaw_sp_move_rate = 0.0f;
+	_att_sp.fw_control_yaw_wheel = false;
+	_att_sp.reset_integral = false;
+}
+
 float FixedwingPositionControl::getLoadFactor()
 {
 	float load_factor_from_bank_angle = 1.0f;

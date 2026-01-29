@@ -1,12 +1,11 @@
-# StrikeTarget.msg
-# Final simplified version for Strike/Abort operations
+uint64 timestamp        # time since system start (microseconds)
 
-uint64 timestamp          # time since system start (microseconds)
+float32 x               # Target North (meters)
+float32 y               # Target East (meters)
+float32 z               # Target Down (meters)
 
-float64 lat               # Target Latitude [deg]
-float64 lon               # Target Longitude [deg]
-float32 alt               # Target Altitude [m]
+bool active             # Guidance activation state
+uint8 action_type       # 0=Strike, 1=Abort
 
-uint8 action_type         # 0 = STRIKE, 1 = ABORT
-
-uint32 MESSAGE_VERSION = 0
+uint8 ACTION_STRIKE = 0
+uint8 ACTION_ABORT = 1

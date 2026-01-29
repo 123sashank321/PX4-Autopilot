@@ -85,6 +85,8 @@ publications:
 
 # Create uORB::Publication
 subscriptions:
+  - topic: /fmu/in/strike_target
+    type: px4_msgs::msg::StrikeTarget
   - topic: /fmu/in/register_ext_component_request
     type: px4_msgs::msg::RegisterExtComponentRequest
 

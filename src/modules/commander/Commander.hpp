@@ -82,6 +82,7 @@
 #include <uORB/topics/vehicle_global_position.h>
 #include <uORB/topics/vehicle_land_detected.h>
 #include <uORB/topics/vtol_vehicle_status.h>
+#include <uORB/topics/strike_target.h>
 
 using math::constrain;
 using systemlib::Hysteresis;
@@ -296,7 +297,8 @@ private:
 	uORB::Subscription					_vehicle_command_sub{ORB_ID(vehicle_command)};
 	uORB::Subscription					_vehicle_command_mode_executor_sub{ORB_ID(vehicle_command_mode_executor)};
 	uORB::Subscription					_vehicle_land_detected_sub{ORB_ID(vehicle_land_detected)};
-	uORB::Subscription					_vtol_vehicle_status_sub{ORB_ID(vtol_vehicle_status)};
+	uORB::Subscription				_vtol_vehicle_status_sub{ORB_ID(vtol_vehicle_status)};
+	uORB::Subscription				_strike_target_sub{ORB_ID(strike_target)};
 
 	uORB::SubscriptionInterval				_parameter_update_sub{ORB_ID(parameter_update), 1_s};
 
