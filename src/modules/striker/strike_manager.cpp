@@ -42,11 +42,8 @@ StrikeManager::StrikeManager()
 
 bool StrikeManager::init()
 {
-	// Schedule periodic run at 50Hz (20ms) for high-rate guidance
-	ScheduleOnInterval(20_ms);
-
-	// Register callback for dynamic target updates
-	_strike_target_sub.registerCallback();
+	// Schedule periodic run at 10Hz (100ms) for watchdog
+	ScheduleOnInterval(100_ms);
 
 	// Register callback for vehicle_command topic
 	if (!_vehicle_command_sub.registerCallback()) {
@@ -63,25 +60,12 @@ void StrikeManager::Run()
 	if (should_exit()) {
 		ScheduleClear();
 		_vehicle_command_sub.unregisterCallback();
-		_strike_target_sub.unregisterCallback();
 		exit_and_cleanup();
 		return;
 	}
 
 	// 1. Check for dynamic target updates (from ROS 2 or other modules)
-	if (_strike_target_sub.updated()) {
-		// In a real robust system, we might resell "ros-converted-ned" here
-		// but since we redefined the msg to be NED, the external source
-		// is expected to send NED or we should handle it.
-		// For now, let's assume external sources send NED if they use this topic.
 
-		// Ideally we just proxy or if this module is the ONLY publisher,
-		// we don't need to listen to ourselves unless for state tracking?
-		// Actually, we subscribe to 'strike_target' in strict sense only if
-		// we want to react to external updates.
-		// But if we are the authority, we don't need to do anything here if
-		// the FlightTask listens to the topic directly.
-	}
 
 	// 2. Watchdog for External Mode Changes (User pressed Hold/Pause)
 	vehicle_status_s status;
@@ -194,8 +178,31 @@ void StrikeManager::handle_vehicle_command(const vehicle_command_s *vehicle_comm
 
 			_strike_target_pub.publish(strike_target);
 
-			mavlink_log_info(&_mavlink_log_pub, "ABORTED: Reverting to previous waypoint");
-			PX4_INFO("Published ABORT target");
+			// Check if Param 5/6 (Lat/Lon) are provided for a Guided Abort
+			if (fabs(lat) > 0.000001 && fabs(lon) > 0.000001) {
+				// Send Reposition Command
+				vehicle_command_s reposition_cmd{};
+				reposition_cmd.command = vehicle_command_s::VEHICLE_CMD_DO_REPOSITION;
+				reposition_cmd.param1 = -1.0f; // Ground Speed (Default)
+				reposition_cmd.param2 = 1.0f; // Bit 1: Reposition
+				reposition_cmd.param5 = lat;
+				reposition_cmd.param6 = lon;
+				reposition_cmd.param7 = alt;
+
+				reposition_cmd.target_system = 1;
+				reposition_cmd.target_component = 1;
+				reposition_cmd.source_system = 1;
+				reposition_cmd.source_component = 1;
+				reposition_cmd.from_external = false;
+				reposition_cmd.confirmation = 0;
+				reposition_cmd.timestamp = hrt_absolute_time();
+
+				uORB::Publication<vehicle_command_s> vcmd_pub{ORB_ID(vehicle_command)};
+				vcmd_pub.publish(reposition_cmd);
+
+				mavlink_log_info(&_mavlink_log_pub, "ABORTED: Repositioning to %.5f, %.5f", lat, lon);
+				PX4_INFO("Published Reposition to Lat: %.5f Lon: %.5f", lat, lon);
+			}
 
 		} else { // STRIKE
 			// Update Target State
@@ -247,26 +254,7 @@ bool StrikeManager::global_to_local(double lat, double lon, float alt, matrix::V
 	return false;
 }
 
-void StrikeManager::switch_to_offboard_mode()
-{
-	vehicle_command_s vcmd{};
-	vcmd.command = vehicle_command_s::VEHICLE_CMD_DO_SET_MODE;
-	vcmd.param1 = 1.0f; // Custom mode
-	vcmd.param2 = 6.0f; // OFFBOARD mode
-	vcmd.target_system = 1;
-	vcmd.target_component = 1;
-	vcmd.source_system = 1;
-	vcmd.source_component = 1;
-	vcmd.confirmation = 0;
-	vcmd.from_external = false;
-	vcmd.timestamp = hrt_absolute_time();
 
-	// Publish command to switch mode
-	uORB::Publication<vehicle_command_s> vcmd_pub{ORB_ID(vehicle_command)};
-	vcmd_pub.publish(vcmd);
-
-	mavlink_log_info(&_mavlink_log_pub, "Switching to OFFBOARD mode provided by striker");
-}
 
 int StrikeManager::print_usage(const char *reason)
 {

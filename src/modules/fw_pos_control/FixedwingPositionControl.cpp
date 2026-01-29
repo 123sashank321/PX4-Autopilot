@@ -3409,8 +3409,14 @@ void FixedwingPositionControl::control_strike(const float control_interval)
 	// N = 4 (Pure ProNav)
 	matrix::Vector3f acc_pn = omega.cross(R_unit) * (4.0f * V_closing);
 
-	float a_y = acc_pn(1);
-	float a_z = acc_pn(2);
+	// Convert NED acceleration to Body acceleration
+	vehicle_attitude_s att;
+	_vehicle_attitude_sub.copy(&att);
+	Quatf q_vehicle(att.q);
+	matrix::Vector3f acc_body = matrix::Dcmf(q_vehicle).transpose() * acc_pn;
+
+	float a_y = acc_body(1);
+	float a_z = acc_body(2);
 
 	float roll = atan2f(a_y, 9.81f);
 	roll = constrain(roll, -radians(45.0f), radians(45.0f));
