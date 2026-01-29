@@ -105,15 +105,15 @@ private:
 
 	// Subscriptions
 	uORB::SubscriptionCallbackWorkItem _vehicle_command_sub{this, ORB_ID(vehicle_command)};
-	uORB::SubscriptionCallbackWorkItem _strike_target_sub{this, ORB_ID(strike_target)}; // Dynamic updates
 
-	uORB::Subscription _vehicle_local_position_sub{ORB_ID(vehicle_local_position)};
+
+
 	uORB::Subscription _vehicle_status_sub{ORB_ID(vehicle_status)};
 	uORB::Subscription _home_position_sub{ORB_ID(home_position)};
 
 	// Publications
 	uORB::Publication<strike_target_s> _strike_target_pub{ORB_ID(strike_target)};
-	uORB::Publication<trajectory_setpoint_s> _trajectory_setpoint_pub{ORB_ID(trajectory_setpoint)};
+
 
 	// Statistics
 	uint32_t _strike_target_count{0};
@@ -128,5 +128,5 @@ private:
 	bool global_to_local(double lat, double lon, float alt, matrix::Vector3f &ned);
 
 	// Helper to switch to Offboard mode (legacy, may not be needed)
-	void switch_to_offboard_mode();
+
 };
