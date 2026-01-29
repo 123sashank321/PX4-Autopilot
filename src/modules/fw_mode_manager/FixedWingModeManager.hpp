@@ -88,6 +88,7 @@
 #include <uORB/topics/vehicle_local_position.h>
 #include <uORB/topics/vehicle_local_position_setpoint.h>
 #include <uORB/topics/vehicle_status.h>
+#include <uORB/topics/strike_target.h>
 #include <uORB/topics/wind.h>
 #include <uORB/topics/orbit_status.h>
 
@@ -187,6 +188,7 @@ private:
 	uORB::Subscription _vehicle_command_sub{ORB_ID(vehicle_command)};
 	uORB::Subscription _vehicle_land_detected_sub{ORB_ID(vehicle_land_detected)};
 	uORB::Subscription _vehicle_status_sub{ORB_ID(vehicle_status)};
+	uORB::Subscription _strike_target_sub{ORB_ID(strike_target)}; // To detect Strike mode
 
 	uORB::Publication<vehicle_local_position_setpoint_s> _local_pos_sp_pub{ORB_ID(vehicle_local_position_setpoint)};
 	uORB::Publication<position_controller_landing_status_s>	_pos_ctrl_landing_status_pub{ORB_ID(position_controller_landing_status)};
@@ -233,6 +235,7 @@ private:
 		FW_POSCTRL_MODE_MANUAL_ALTITUDE,
 		FW_POSCTRL_MODE_TRANSITION_TO_HOVER_LINE_FOLLOW,
 		FW_POSCTRL_MODE_TRANSITION_TO_HOVER_HEADING_HOLD,
+		FW_POSCTRL_MODE_STRIKE,
 		FW_POSCTRL_MODE_OTHER
 	} _control_mode_current{FW_POSCTRL_MODE_OTHER}; // used to check if the mode has changed
 
@@ -619,6 +622,11 @@ private:
 	 * @param ground_speed Local 2D ground speed of vehicle [m/s]
 	 */
 	void control_manual_altitude(const float control_interval, const Vector2d &curr_pos, const Vector2f &ground_speed);
+
+	/**
+	 * Control strike mode
+	 */
+	void control_strike(const float control_interval);
 
 	/**
 	 * @brief Controls user commanded altitude, airspeed, and bearing.

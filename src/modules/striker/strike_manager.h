@@ -50,8 +50,14 @@
 #include <uORB/SubscriptionCallback.hpp>
 
 #include <uORB/topics/vehicle_command.h>
-#include <uORB/topics/vehicle_command_ack.h>
+#include <uORB/topics/vehicle_command.h>
 #include <uORB/topics/strike_target.h>
+#include <uORB/topics/vehicle_local_position.h>
+#include <uORB/topics/vehicle_status.h>
+#include <uORB/topics/trajectory_setpoint.h>
+#include <uORB/topics/home_position.h>
+
+#include <lib/systemlib/mavlink_log.h>
 
 using namespace time_literals;
 
@@ -63,6 +69,7 @@ extern "C" __EXPORT int striker_main(int argc, char *argv[]);
  * Processes MAV_CMD_USER_1 (31010) commands from QGroundControl or mission plans,
  * extracts strike target coordinates (lat/lon from param5/param6, ID from param1),
  * and publishes them to the strike_target uORB topic for downstream processing.
+ *
  *
  * This module uses a subscription callback mechanism to the 'vehicle_command' topic
  * and only runs when relevant commands are received.
@@ -96,24 +103,30 @@ private:
 	 */
 	void handle_vehicle_command(const vehicle_command_s *vehicle_command);
 
-	/**
-	 * @brief Send acknowledgment for vehicle command
-	 *
-	 * @param command Command ID to acknowledge
-	 * @param result Result code (ACCEPTED, DENIED, etc.)
-	 * @param target_system Target system ID
-	 * @param target_component Target component ID
-	 */
-	void send_vehicle_command_ack(uint32_t command, uint8_t result,
-	                               uint8_t target_system, uint8_t target_component);
-
 	// Subscriptions
 	uORB::SubscriptionCallbackWorkItem _vehicle_command_sub{this, ORB_ID(vehicle_command)};
+	uORB::SubscriptionCallbackWorkItem _strike_target_sub{this, ORB_ID(strike_target)}; // Dynamic updates
+
+	uORB::Subscription _vehicle_local_position_sub{ORB_ID(vehicle_local_position)};
+	uORB::Subscription _vehicle_status_sub{ORB_ID(vehicle_status)};
+	uORB::Subscription _home_position_sub{ORB_ID(home_position)};
 
 	// Publications
 	uORB::Publication<strike_target_s> _strike_target_pub{ORB_ID(strike_target)};
-	uORB::Publication<vehicle_command_ack_s> _vehicle_command_ack_pub{ORB_ID(vehicle_command_ack)};
+	uORB::Publication<trajectory_setpoint_s> _trajectory_setpoint_pub{ORB_ID(trajectory_setpoint)};
 
 	// Statistics
 	uint32_t _strike_target_count{0};
+
+	// MAVLink log publisher
+	orb_advert_t _mavlink_log_pub{nullptr};
+
+	// Strike state tracking (for watchdog)
+	bool _strike_active{false};
+
+	// Helper to convert LLA to NED
+	bool global_to_local(double lat, double lon, float alt, matrix::Vector3f &ned);
+
+	// Helper to switch to Offboard mode (legacy, may not be needed)
+	void switch_to_offboard_mode();
 };
