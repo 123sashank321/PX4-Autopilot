@@ -8,8 +8,8 @@
 . ${R}etc/init.d/rc.mc_defaults
 
 PX4_SIMULATOR=${PX4_SIMULATOR:=gz}
-PX4_GZ_WORLD=${PX4_GZ_WORLD:=tugbot_depot}
-PX4_SIM_MODEL=${PX4_SIM_MODEL:=x500_custom}
+PX4_GZ_WORLD=${PX4_GZ_WORLD:=default}
+PX4_SIM_MODEL=${PX4_SIM_MODEL:=x500_d435i}
 
 param set-default SIM_GZ_EN 1
 

@@ -53,6 +53,7 @@
 #include <uORB/topics/vehicle_command.h>
 #include <uORB/topics/strike_target.h>
 #include <uORB/topics/vehicle_local_position.h>
+#include <uORB/topics/vehicle_global_position.h>
 #include <uORB/topics/vehicle_status.h>
 #include <uORB/topics/trajectory_setpoint.h>
 #include <uORB/topics/home_position.h>
@@ -110,6 +111,7 @@ private:
 
 	uORB::Subscription _vehicle_status_sub{ORB_ID(vehicle_status)};
 	uORB::Subscription _home_position_sub{ORB_ID(home_position)};
+	uORB::Subscription _global_pos_sub{ORB_ID(vehicle_global_position)};
 
 	// Publications
 	uORB::Publication<strike_target_s> _strike_target_pub{ORB_ID(strike_target)};
@@ -127,6 +129,8 @@ private:
 	// Helper to convert LLA to NED
 	bool global_to_local(double lat, double lon, float alt, matrix::Vector3f &ned);
 
-	// Helper to switch to Offboard mode (legacy, may not be needed)
+	DEFINE_PARAMETERS(
+		(ParamFloat<px4::params::STR_REC_ALT>) _param_str_rec_alt
+	)
 
 };
