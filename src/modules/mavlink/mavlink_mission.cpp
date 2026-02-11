@@ -1497,6 +1497,13 @@ MavlinkMissionManager::parse_mavlink_mission_item(const mavlink_mission_item_t *
 			mission_item->params[6] = mavlink_mission_item->z;
 			break;
 
+		case 31010: // MAV_CMD_USER_1
+			mission_item->nav_cmd = (NAV_CMD)31010;
+			// Params 5 and 6 (Lat/Lon) are already handled above by the int_mode check
+			// Param 7 (Alt) is handled by mavlink_mission_item->z assignment above
+			mission_item->params[0] = mavlink_mission_item->param1; // Action (0=Strike, 1=Abort)
+			break;
+
 		case MAV_CMD_NAV_VTOL_TAKEOFF:
 		case MAV_CMD_NAV_VTOL_LAND:
 			mission_item->nav_cmd = (NAV_CMD)mavlink_mission_item->command;

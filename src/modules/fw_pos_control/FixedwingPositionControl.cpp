@@ -685,14 +685,20 @@ FixedwingPositionControl::set_control_mode_current(const hrt_abstime &now)
 		return; // do not publish the setpoint
 	}
 
+	// Handle Strike Mode
 	if (_vehicle_status.nav_state == vehicle_status_s::NAVIGATION_STATE_STRIKE) {
 		_control_mode_current = FW_POSCTRL_MODE_STRIKE;
 		return;
 	}
 
-	if (_vehicle_status.nav_state == vehicle_status_s::NAVIGATION_STATE_STRIKE) {
-		_control_mode_current = FW_POSCTRL_MODE_STRIKE;
-		return;
+	// Reset TECS integrals if switching FROM Strike (to prevent stuck throttle)
+	if (_control_mode_current == FW_POSCTRL_MODE_STRIKE) {
+		_tecs.resetIntegrals();
+		// Also reset the TECS altitude and vertical speed states to the current vehicle state
+		// This prevents large initial error terms when re-engaging TECS
+		if (PX4_ISFINITE(_current_altitude) && PX4_ISFINITE(_local_pos.vz)) {
+			_tecs.handle_alt_step(_current_altitude, -_local_pos.vz);
+		}
 	}
 
 	FW_POSCTRL_MODE commanded_position_control_mode = _control_mode_current;
@@ -3419,10 +3425,10 @@ void FixedwingPositionControl::control_strike(const float control_interval)
 	float a_z = acc_body(2);
 
 	float roll = atan2f(a_y, 9.81f);
-	roll = constrain(roll, -radians(45.0f), radians(45.0f));
+	roll = constrain(roll, -radians(60.0f), radians(60.0f));
 
 	float pitch = -atan2f(a_z, 15.0f);
-	pitch = constrain(pitch, -radians(30.0f), radians(30.0f));
+	pitch = constrain(pitch, -radians(45.0f), radians(45.0f));
 
 	float yaw = atan2f(R(1), R(0));
 

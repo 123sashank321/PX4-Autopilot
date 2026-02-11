@@ -33,6 +33,7 @@
 
 #include "strike_manager.h"
 #include <lib/geo/geo.h>
+#include <uORB/topics/vehicle_global_position.h>
 
 StrikeManager::StrikeManager()
 	: ModuleParams(nullptr),
@@ -50,6 +51,9 @@ bool StrikeManager::init()
 		PX4_ERR("vehicle_command callback registration failed");
 		return false;
 	}
+
+	// Load parameters
+	updateParams();
 
 	PX4_INFO("Strike Manager initialized");
 	return true;
@@ -72,71 +76,23 @@ void StrikeManager::Run()
 	if (_vehicle_status_sub.updated()) {
 		if (_vehicle_status_sub.copy(&status)) {
 
-			// Detect Mode SWITCH (Edge Detection)
-			// We only want to abort if the user *switches* to a manual mode from something else,
-			// or if we are active and the mode *changes*.
-			// But wait, if we are in Strike, the underlying nav_state might actally BE 'POSCTL' or 'LOITER'
-			// if FlightModeManager injects the task on top of it.
-			// Actually, FlightModeManager usually maps NavState -> FlightTask.
-			// e.g. NAV_STATE_POSCTL -> FlightTaskManualPosition.
-			// Our logic in FlightModeManager *overrides* this mapping.
-			// So if the system thinks it is in POSCTL, but we forced FlightTaskStrike,
-			// the `status.nav_state` will report `POSCTL`.
-			// So `status.nav_state == POSCTL` is TRUE while striking!
-			// This causes the immediate abort.
+			// If we think we are striking, but the system is NOT in Strike mode,
+			// it means the user or system has switched modes (e.g. to Loiter, RTL, or Stick Override).
+			// We must update our internal state and notify listeners.
+			if (_strike_active && status.nav_state != vehicle_status_s::NAVIGATION_STATE_STRIKE) {
+				_strike_active = false;
 
-			// FIX: We cannot rely on static nav_state checks if our Task hijacks the state.
-			// We should only abort if we see a REQUEST for a mode change or a change in state.
+				strike_target_s abort_msg{};
+				abort_msg.timestamp = hrt_absolute_time();
+				abort_msg.active = false;
+				abort_msg.action_type = 1; // Abort
+				abort_msg.x = NAN;
+				abort_msg.y = NAN;
+				abort_msg.z = NAN;
 
-			// Better yet: We should only check for "Safe" modes that definitely imply "Give me control"
-			// AND ensure we aren't just reading the steady state.
-
-			static uint8_t last_nav_state = 0;
-			static hrt_abstime strike_activation_time = 0;
-
-			// Initialize last state on first run
-			if (last_nav_state == 0) last_nav_state = status.nav_state;
-
-			if (_strike_active) {
-				// Grace period: Don't abort for 2 seconds after activation
-				// This gives FlightModeManager time to switch tasks
-				if (strike_activation_time == 0) {
-					strike_activation_time = hrt_absolute_time();
-				}
-
-				if (hrt_elapsed_time(&strike_activation_time) < 2_s) {
-					// Within grace period, don't check watchdog
-					last_nav_state = status.nav_state;
-					return;
-				}
-
-				// Only abort if the state *changed* to a manual mode
-				if (status.nav_state != last_nav_state) {
-					if (status.nav_state == vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER ||
-						status.nav_state == vehicle_status_s::NAVIGATION_STATE_POSCTL ||
-						status.nav_state == vehicle_status_s::NAVIGATION_STATE_AUTO_LAND ||
-						status.nav_state == vehicle_status_s::NAVIGATION_STATE_AUTO_RTL) {
-
-						_strike_active = false;
-
-						strike_target_s abort_msg{};
-						abort_msg.timestamp = hrt_absolute_time();
-						abort_msg.active = false;
-						abort_msg.action_type = 1; // Abort
-						abort_msg.x = NAN;
-						abort_msg.y = NAN;
-						abort_msg.z = NAN;
-
-						_strike_target_pub.publish(abort_msg);
-						PX4_INFO("User Override: Strike Aborted by Mode Switch (To %d)", status.nav_state);
-						mavlink_log_info(&_mavlink_log_pub, "Strike Aborted by Mode Switch");
-					}
-				}
-			} else {
-				// Reset activation time when inactive
-				strike_activation_time = 0;
+				_strike_target_pub.publish(abort_msg);
+				PX4_INFO("Strike Aborted by External Mode Switch (To NavState: %d)", status.nav_state);
 			}
-			last_nav_state = status.nav_state;
 		}
 	}
 
@@ -180,6 +136,20 @@ void StrikeManager::handle_vehicle_command(const vehicle_command_s *vehicle_comm
 
 			// Check if Param 5/6 (Lat/Lon) are provided for a Guided Abort
 			if (fabs(lat) > 0.000001 && fabs(lon) > 0.000001) {
+				// Get current altitude for debugging
+				vehicle_global_position_s global_pos;
+				float current_alt = 0.0f;
+				if (_global_pos_sub.copy(&global_pos)) {
+					current_alt = global_pos.alt;
+				}
+
+				// Get recovery altitude from parameter
+				float recovery_alt = _param_str_rec_alt.get();
+
+				// Log what QGC sent us
+				//PX4_INFO("ABORT: QGC sent alt=%.2f (param7), Using STR_REC_ALT=%.2f", (double)alt, (double)recovery_alt);
+				PX4_INFO("ABORT: Current vehicle alt=%.2f", (double)current_alt);
+
 				// Send Reposition Command
 				vehicle_command_s reposition_cmd{};
 				reposition_cmd.command = vehicle_command_s::VEHICLE_CMD_DO_REPOSITION;
@@ -187,21 +157,18 @@ void StrikeManager::handle_vehicle_command(const vehicle_command_s *vehicle_comm
 				reposition_cmd.param2 = 1.0f; // Bit 1: Reposition
 				reposition_cmd.param5 = lat;
 				reposition_cmd.param6 = lon;
-				reposition_cmd.param7 = alt;
+				reposition_cmd.param7 = recovery_alt; // Use parameter
 
 				reposition_cmd.target_system = 1;
 				reposition_cmd.target_component = 1;
-				reposition_cmd.source_system = 1;
-				reposition_cmd.source_component = 1;
-				reposition_cmd.from_external = false;
-				reposition_cmd.confirmation = 0;
 				reposition_cmd.timestamp = hrt_absolute_time();
 
 				uORB::Publication<vehicle_command_s> vcmd_pub{ORB_ID(vehicle_command)};
 				vcmd_pub.publish(reposition_cmd);
 
-				mavlink_log_info(&_mavlink_log_pub, "ABORTED: Repositioning to %.5f, %.5f", lat, lon);
-				PX4_INFO("Published Reposition to Lat: %.5f Lon: %.5f", lat, lon);
+				mavlink_log_info(&_mavlink_log_pub, "ABORTED: Repositioning to %.5f, %.5f @ %.0fm AMSL", lat, lon, (double)recovery_alt);
+				PX4_INFO("ABORT: Commanded DO_REPOSITION with alt=%.2f AMSL", (double)recovery_alt);
+				//PX4_INFO("ABORT: Expected climb from %.2f to %.2f", (double)current_alt, (double)recovery_alt);
 			}
 
 		} else { // STRIKE
@@ -220,7 +187,7 @@ void StrikeManager::handle_vehicle_command(const vehicle_command_s *vehicle_comm
 
 				mavlink_log_info(&_mavlink_log_pub, "STRIKE: %.4f, %.4f @ %.0fm", lat, lon, static_cast<double>(alt));
 				PX4_INFO("Published STRIKE target #%u: x=%.2f, y=%.2f, z=%.2f",
-					 _strike_target_count, (double)ned(0), (double)ned(1), (double)ned(2));
+					 (unsigned)_strike_target_count, (double)ned(0), (double)ned(1), (double)ned(2));
 			} else {
 				mavlink_log_critical(&_mavlink_log_pub, "Strike Failed: Invalid Home Position");
 			}
@@ -231,7 +198,7 @@ void StrikeManager::handle_vehicle_command(const vehicle_command_s *vehicle_comm
 
 int StrikeManager::print_status()
 {
-	PX4_INFO("Strike targets published: %u", _strike_target_count);
+	PX4_INFO("Strike targets published: %u", (unsigned)_strike_target_count);
 	return 0;
 }
 

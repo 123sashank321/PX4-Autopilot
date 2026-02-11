@@ -339,8 +339,6 @@ fi
 
 payload_deliverer start
 
-striker start
-
 if param compare -s ICE_EN 1
 then
 	internal_combustion_engine_control start

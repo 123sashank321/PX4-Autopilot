@@ -1,3 +1,7 @@
 module_name: Strike Manager
 
+sources:
+  - strike_manager.cpp
+  - strike_manager_params.c
+
 parameters: []
