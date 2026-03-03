@@ -58,5 +58,13 @@ For the most up to date information, please visit [PX4 User Guide > Autopilot Ha
 
 The PX4 Autopilot project including all of its trademarks is hosted under [Dronecode](https://www.dronecode.org/), part of the Linux Foundation.
 
+## Custom Modules
+
+This fork includes the following custom flight mode extensions:
+
+| Module | Description |
+|--------|-------------|
+| [Striker](src/modules/striker/README.md) | Fixed-wing guided strike mode. Receives target coordinates via MAVLink (`MAV_CMD_USER_1`), executes a Proportional Navigation intercept, and supports Guided Abort with configurable recovery altitude (`STR_REC_ALT`). |
+
 <a href="https://www.dronecode.org/" style="padding:20px" ><img src="https://dronecode.org/wp-content/uploads/sites/24/2020/08/dronecode_logo_default-1.png" alt="Dronecode Logo" width="110px"/></a>
 <div style="padding:10px">&nbsp;</div>
