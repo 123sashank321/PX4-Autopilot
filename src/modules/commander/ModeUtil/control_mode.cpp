@@ -164,10 +164,16 @@ void getVehicleControlMode(uint8_t nav_state, uint8_t vehicle_type,
 		break;
 
 	case vehicle_status_s::NAVIGATION_STATE_STRIKE:
-		vehicle_control_mode.flag_control_auto_enabled = true;
-		vehicle_control_mode.flag_control_position_enabled = true; // Required for FWPC
-		vehicle_control_mode.flag_control_attitude_enabled = true;
-		vehicle_control_mode.flag_control_rates_enabled = true;
+		// Strike: APN guidance runs inside fw_mode_manager::control_strike().
+		// flag_control_altitude_enabled is set so fw_lateral_longitudinal_control's
+		// should_run check passes (it needs at least one of position/velocity/altitude/etc).
+		// TECS is bypassed via pitch_direct + throttle_direct in the setpoints.
+		// flag_control_position_enabled is NOT set — fw_mode_manager detects
+		// NAVIGATION_STATE_STRIKE before the auto+position branch, NPFG never runs.
+		vehicle_control_mode.flag_control_auto_enabled       = true;
+		vehicle_control_mode.flag_control_altitude_enabled   = true;
+		vehicle_control_mode.flag_control_attitude_enabled   = true;
+		vehicle_control_mode.flag_control_rates_enabled      = true;
 		vehicle_control_mode.flag_control_allocation_enabled = true;
 		break;
 
