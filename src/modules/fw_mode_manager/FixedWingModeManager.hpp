@@ -88,7 +88,6 @@
 #include <uORB/topics/vehicle_local_position.h>
 #include <uORB/topics/vehicle_local_position_setpoint.h>
 #include <uORB/topics/vehicle_status.h>
-#include <uORB/topics/strike_target.h>
 #include <uORB/topics/wind.h>
 #include <uORB/topics/orbit_status.h>
 
@@ -96,6 +95,9 @@
 #include "figure_eight/FigureEight.hpp"
 #include <uORB/topics/figure_eight_status.h>
 #endif // CONFIG_FIGURE_OF_EIGHT
+
+#include "strike_guidance/StrikeGuidance.hpp"
+#include <uORB/topics/strike_target.h>
 
 using namespace launchdetection;
 using namespace runwaytakeoff;
@@ -188,7 +190,6 @@ private:
 	uORB::Subscription _vehicle_command_sub{ORB_ID(vehicle_command)};
 	uORB::Subscription _vehicle_land_detected_sub{ORB_ID(vehicle_land_detected)};
 	uORB::Subscription _vehicle_status_sub{ORB_ID(vehicle_status)};
-	uORB::Subscription _strike_target_sub{ORB_ID(strike_target)}; // To detect Strike mode
 
 	uORB::Publication<vehicle_local_position_setpoint_s> _local_pos_sp_pub{ORB_ID(vehicle_local_position_setpoint)};
 	uORB::Publication<position_controller_landing_status_s>	_pos_ctrl_landing_status_pub{ORB_ID(position_controller_landing_status)};
@@ -413,6 +414,10 @@ private:
 	void publishFigureEightStatus(const position_setpoint_s pos_sp);
 #endif // CONFIG_FIGURE_OF_EIGHT
 
+	// Strike guidance — runs when nav_state == NAVIGATION_STATE_STRIKE
+	StrikeGuidance _strike_guidance;
+	void control_strike(const float control_interval);
+
 	// Update our local parameter cache.
 	void parameters_update();
 
@@ -622,11 +627,6 @@ private:
 	 * @param ground_speed Local 2D ground speed of vehicle [m/s]
 	 */
 	void control_manual_altitude(const float control_interval, const Vector2d &curr_pos, const Vector2f &ground_speed);
-
-	/**
-	 * Control strike mode
-	 */
-	void control_strike(const float control_interval);
 
 	/**
 	 * @brief Controls user commanded altitude, airspeed, and bearing.
