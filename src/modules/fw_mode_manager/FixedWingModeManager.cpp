@@ -2790,12 +2790,20 @@ FixedWingModeManager::control_strike(const float control_interval)
 	//   V_closing = V_vehicle · R̂  (positive = approaching)
 	//   ω = (R × dR/dt) / |R|²
 	//   a_pn = N · V_c · (ω × R̂)  [NED, m/s²]
-	constexpr float        PN_GAIN = 4.0f;
-	const matrix::Vector3f Rdot    = -vel;
-	const float            V_closing = -Rdot.dot(R) / R_mag;
+	constexpr float        PN_GAIN   = 4.0f;
+	const matrix::Vector3f Rdot      = -vel;
+	const float            V_closing = -Rdot.dot(R) / R_mag;   // kept for debug only
 	const matrix::Vector3f omega     = R.cross(Rdot) / (R_mag * R_mag);
 	const matrix::Vector3f R_hat     = R.normalized();
-	const matrix::Vector3f a_pn      = omega.cross(R_hat) * (PN_GAIN * V_closing);
+
+	// Use vehicle speed magnitude, not V_closing, in the PN multiplier.
+	// V_closing is negative when the aircraft is flying AWAY from target (wrong initial
+	// heading), which would invert the sign of a_pn and cause divergence.
+	// For a stationary target the correct PN formulation is: a = N * |V| * omega_LOS
+	// where |V| is the pursuer's own speed — always positive, direction from omega x R_hat.
+	const float            V_ref = math::max(vel.norm(), 1.0f);
+	const matrix::Vector3f a_pn  = omega.cross(R_hat) * (PN_GAIN * V_ref);
+
 
 	// ── 4. Project NED acceleration onto body lateral / vertical axes ───────
 	//   Lateral (FRD-Y, positive = right-bank):  a_lat = -a_N·sin(ψ) + a_E·cos(ψ)
