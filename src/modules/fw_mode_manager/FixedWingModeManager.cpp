@@ -368,6 +368,12 @@ FixedWingModeManager::set_control_mode_current(const hrt_abstime &now)
 		return; // do not publish the setpoint
 	}
 
+	// Strike mode takes priority over all other FW modes
+	if (_vehicle_status.nav_state == vehicle_status_s::NAVIGATION_STATE_STRIKE) {
+		_control_mode_current = FW_POSCTRL_MODE_STRIKE;
+		return;
+	}
+
 	const FW_POSCTRL_MODE previous_position_control_mode = _control_mode_current;
 
 	_skipping_takeoff_detection = false;
@@ -2210,6 +2216,11 @@ FixedWingModeManager::Run()
 				break;
 			}
 
+		case FW_POSCTRL_MODE_STRIKE: {
+				control_strike(control_interval);
+				break;
+			}
+
 		case FW_POSCTRL_MODE_OTHER: {
 				break;
 			}
@@ -2737,6 +2748,114 @@ lateral-longitudinal controller and and controllers below that (attitude, rate).
 	PRINT_MODULE_USAGE_DEFAULT_COMMANDS();
 
 	return 0;
+}
+
+void
+FixedWingModeManager::control_strike(const float control_interval)
+{
+	// ── 1. Fetch strike target ──────────────────────────────────────────────
+	strike_target_s target{};
+
+	if (!_strike_target_sub.copy(&target) || !target.active) {
+		// No valid target: hold wings level at current altitude
+		const hrt_abstime now = hrt_absolute_time();
+
+		fixed_wing_lateral_setpoint_s lat_idle{empty_lateral_control_setpoint};
+		lat_idle.timestamp            = now;
+		lat_idle.lateral_acceleration = 0.0f;
+		_lateral_ctrl_sp_pub.publish(lat_idle);
+
+		const fixed_wing_longitudinal_setpoint_s long_idle = {
+			.timestamp           = now,
+			.altitude            = _current_altitude,
+			.height_rate         = NAN,
+			.equivalent_airspeed = NAN,
+			.pitch_direct        = NAN,
+			.throttle_direct     = NAN
+		};
+		_longitudinal_ctrl_sp_pub.publish(long_idle);
+		return;
+	}
+
+	// ── 2. Build NED range vector ───────────────────────────────────────────
+	const matrix::Vector3f pos(_local_pos.x, _local_pos.y, _local_pos.z);
+	const matrix::Vector3f vel(_local_pos.vx, _local_pos.vy, _local_pos.vz);
+	const matrix::Vector3f target_ned(target.x, target.y, target.z);
+
+	const matrix::Vector3f R     = target_ned - pos;          // NED range: target - vehicle
+	const float            R_mag = math::max(R.norm(), 0.5f); // [m] guard divide-by-zero
+
+	// ── 3. Pure Proportional Navigation (N = 4) ─────────────────────────────
+	//   Stationary target → dR/dt = -V_vehicle
+	//   V_closing = V_vehicle · R̂  (positive = approaching)
+	//   ω = (R × dR/dt) / |R|²
+	//   a_pn = N · V_c · (ω × R̂)  [NED, m/s²]
+	constexpr float        PN_GAIN = 4.0f;
+	const matrix::Vector3f Rdot    = -vel;
+	const float            V_closing = -Rdot.dot(R) / R_mag;
+	const matrix::Vector3f omega     = R.cross(Rdot) / (R_mag * R_mag);
+	const matrix::Vector3f R_hat     = R.normalized();
+	const matrix::Vector3f a_pn      = omega.cross(R_hat) * (PN_GAIN * V_closing);
+
+	// ── 4. Project NED acceleration onto body lateral / vertical axes ───────
+	//   Lateral (FRD-Y, positive = right-bank):  a_lat = -a_N·sin(ψ) + a_E·cos(ψ)
+	//   Vertical (NED-down = body-down):         a_vert = a_D  (positive → nose down)
+	const float sin_yaw  = sinf(_yaw);
+	const float cos_yaw  = cosf(_yaw);
+	const float a_lateral  = -a_pn(0) * sin_yaw + a_pn(1) * cos_yaw;
+	const float a_vertical =  a_pn(2);
+
+	// ── 5. Map to setpoints ──────────────────────────────────────────────────
+	// LATERAL: clamp to ±60° equivalent then pass as lateral_acceleration.
+	// Downstream does: roll_sp = atanf(lat_accel / g)  — same as atan2(a_lat, 9.81)
+	constexpr float MAX_ROLL_RAD = math::radians(60.0f);
+	const float a_lat_max        = tanf(MAX_ROLL_RAD) * CONSTANTS_ONE_G;
+	const float a_lat_clamped    = math::constrain(a_lateral, -a_lat_max, a_lat_max);
+
+	// VERTICAL: map NED-down accel → pitch angle (TECS fully bypassed)
+	// Use measured EAS when valid, else assume 15 m/s (loiter/low-speed entry)
+	const float tas         = (_airspeed_valid && _airspeed_eas > 2.0f) ? _airspeed_eas : 15.0f;
+	const float pitch_direct = math::constrain(-atan2f(a_vertical, tas),
+					   math::radians(-45.0f), math::radians(45.0f));
+
+	// ── 6. Publish lateral setpoint (NPFG fully bypassed) ───────────────────
+	//   course=NAN + airspeed_direction=NAN → NPFG PD loop skipped entirely
+	//   lateral_acceleration used as sole input (no NPFG addition)
+	const hrt_abstime now = hrt_absolute_time();
+
+	fixed_wing_lateral_setpoint_s lat_sp{empty_lateral_control_setpoint};
+	lat_sp.timestamp            = now;
+	lat_sp.course               = NAN;
+	lat_sp.airspeed_direction   = NAN;
+	lat_sp.lateral_acceleration = a_lat_clamped;   // [m/s²] FRD
+	_lateral_ctrl_sp_pub.publish(lat_sp);
+
+	// ── 7. Publish longitudinal setpoint (TECS fully bypassed) ──────────────
+	//   pitch_direct + throttle_direct both finite → TECS output discarded
+	const fixed_wing_longitudinal_setpoint_s long_sp = {
+		.timestamp           = now,
+		.altitude            = NAN,          // TECS bypass
+		.height_rate         = NAN,          // TECS bypass
+		.equivalent_airspeed = NAN,          // TECS bypass
+		.pitch_direct        = pitch_direct, // [rad] body pitch setpoint
+		.throttle_direct     = 0.80f         // 80% strike throttle
+	};
+	_longitudinal_ctrl_sp_pub.publish(long_sp);
+
+	// ── 8. Retract flaps/spoilers ────────────────────────────────────────────
+	_flaps_setpoint    = 0.0f;
+	_spoilers_setpoint = 0.0f;
+
+	// ── 9. Debug at ~2 Hz ────────────────────────────────────────────────────
+	static uint32_t _strike_log_ctr = 0;
+
+	if ((_strike_log_ctr++ % 25u) == 0u) {
+		PX4_INFO("Strike: R=[%.0f,%.0f,%.0f]m Vc=%.1fm/s a_lat=%.2f pitch=%.1f deg",
+			 (double)R(0), (double)R(1), (double)R(2),
+			 (double)V_closing,
+			 (double)a_lat_clamped,
+			 (double)math::degrees(pitch_direct));
+	}
 }
 
 extern "C" __EXPORT int fw_mode_manager_main(int argc, char *argv[])
