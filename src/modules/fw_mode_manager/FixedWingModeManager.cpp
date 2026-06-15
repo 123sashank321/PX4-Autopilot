@@ -2785,46 +2785,61 @@ FixedWingModeManager::control_strike(const float control_interval)
 	const matrix::Vector3f R     = target_ned - pos;          // NED range: target - vehicle
 	const float            R_mag = math::max(R.norm(), 0.5f); // [m] guard divide-by-zero
 
-	// ── 3. Pure Proportional Navigation (N = 4) ─────────────────────────────
-	//   Stationary target → dR/dt = -V_vehicle
-	//   V_closing = V_vehicle · R̂  (positive = approaching)
-	//   ω = (R × dR/dt) / |R|²
-	//   a_pn = N · V_c · (ω × R̂)  [NED, m/s²]
-	constexpr float        PN_GAIN   = 4.0f;
-	const matrix::Vector3f Rdot      = -vel;
-	const float            V_closing = -Rdot.dot(R) / R_mag;   // kept for debug only
-	const matrix::Vector3f omega     = R.cross(Rdot) / (R_mag * R_mag);
-	const matrix::Vector3f R_hat     = R.normalized();
+	// ── 3. 2D Horizontal PN guidance (lateral) ─────────────────────────────
+	//
+	// Project guidance entirely into the horizontal NED plane.
+	// 3D PN acceleration is perpendicular to the 3D LOS — it cannot be cleanly
+	// decomposed into body lateral + pitch. Mapping a_pn[2] to pitch_direct
+	// gives nose-UP commands when target is below (wrong sign due to LOS geometry).
+	// Solution: 2D PN in horizontal plane for lateral, elevation angle for pitch.
+	//
+	constexpr float PN_GAIN = 4.0f;
 
-	// Use vehicle speed magnitude, not V_closing, in the PN multiplier.
-	// V_closing is negative when the aircraft is flying AWAY from target (wrong initial
-	// heading), which would invert the sign of a_pn and cause divergence.
-	// For a stationary target the correct PN formulation is: a = N * |V| * omega_LOS
-	// where |V| is the pursuer's own speed — always positive, direction from omega x R_hat.
-	const float            V_ref = math::max(vel.norm(), 1.0f);
-	const matrix::Vector3f a_pn  = omega.cross(R_hat) * (PN_GAIN * V_ref);
+	const matrix::Vector2f R2d(R(0), R(1));                // Horizontal NED range
+	const float R2d_mag = math::max(R2d.norm(), 0.5f);     // [m]
 
+	const matrix::Vector2f vel2d(vel(0), vel(1));           // Horizontal ground speed
+	const matrix::Vector2f Rdot2d = -vel2d;                 // dR/dt = -V for stationary target
 
-	// ── 4. Project NED acceleration onto body lateral / vertical axes ───────
-	//   Lateral (FRD-Y, positive = right-bank):  a_lat = -a_N·sin(ψ) + a_E·cos(ψ)
-	//   Vertical (NED-down = body-down):         a_vert = a_D  (positive → nose down)
-	const float sin_yaw  = sinf(_yaw);
-	const float cos_yaw  = cosf(_yaw);
-	const float a_lateral  = -a_pn(0) * sin_yaw + a_pn(1) * cos_yaw;
-	const float a_vertical =  a_pn(2);
+	// 2D scalar LOS rate: (R × Ṙ)_z / |R|²
+	// Positive = LOS sweeping CCW (nose should turn left/CCW to cancel)
+	const float omega2d = (R2d(0) * Rdot2d(1) - R2d(1) * Rdot2d(0)) / (R2d_mag * R2d_mag);
 
-	// ── 5. Map to setpoints ──────────────────────────────────────────────────
-	// LATERAL: clamp to ±60° equivalent then pass as lateral_acceleration.
-	// Downstream does: roll_sp = atanf(lat_accel / g)  — same as atan2(a_lat, 9.81)
+	// 2D PN: a_horiz = N * |V_horiz| * omega2d  (scalar, perpendicular to LOS in horiz plane)
+	// |V_horiz| always positive → no sign-inversion when diverging
+	const float V2d = math::max(vel2d.norm(), 1.0f);
+	const float a_pn_horiz = PN_GAIN * V2d * omega2d;
+
+	// Perpendicular-to-LOS direction in horizontal NED (90° CCW from R̂2d):
+	//   perp = (-R2d[1], R2d[0]) / R2d_mag
+	// NED horizontal acceleration components:
+	const float a_NED_N = a_pn_horiz * (-R2d(1) / R2d_mag);
+	const float a_NED_E = a_pn_horiz * ( R2d(0) / R2d_mag);
+
+	// ── 4. Project horizontal NED accel onto body lateral axis (FRD-Y) ─────
+	//   Body-right (FRD-Y) in NED: (-sin_yaw, cos_yaw, 0)
+	const float sin_yaw = sinf(_yaw);
+	const float cos_yaw = cosf(_yaw);
+	const float a_lateral = -a_NED_N * sin_yaw + a_NED_E * cos_yaw;
+
+	// ── 5. Pitch: elevation angle to target ─────────────────────────────────
+	//
+	// R(2) is NED-down (positive = target is BELOW aircraft).
+	// atan2f(-R(2), R2d_mag):
+	//   target below → -R(2) < 0 → negative angle → nose DOWN (correct) ✅
+	//   target above → -R(2) > 0 → positive angle → nose UP (correct) ✅
+	//
+	// LATERAL: clamp to ±60° equivalent
 	constexpr float MAX_ROLL_RAD = math::radians(60.0f);
-	const float a_lat_max        = tanf(MAX_ROLL_RAD) * CONSTANTS_ONE_G;
-	const float a_lat_clamped    = math::constrain(a_lateral, -a_lat_max, a_lat_max);
+	const float a_lat_max     = tanf(MAX_ROLL_RAD) * CONSTANTS_ONE_G;
+	const float a_lat_clamped = math::constrain(a_lateral, -a_lat_max, a_lat_max);
 
-	// VERTICAL: map NED-down accel → pitch angle (TECS fully bypassed)
-	// Use measured EAS when valid, else assume 15 m/s (loiter/low-speed entry)
-	const float tas         = (_airspeed_valid && _airspeed_eas > 2.0f) ? _airspeed_eas : 15.0f;
-	const float pitch_direct = math::constrain(-atan2f(a_vertical, tas),
-					   math::radians(-45.0f), math::radians(45.0f));
+	// VERTICAL: direct elevation angle to target, clamped to ±45°
+	const float V_closing  = vel.dot(R) / math::max(R_mag, 0.5f); // debug only
+	const float pitch_direct = math::constrain(
+	    atan2f(-R(2), R2d_mag),
+	    math::radians(-45.0f), math::radians(45.0f));
+
 
 	// ── 6. Publish lateral setpoint (NPFG fully bypassed) ───────────────────
 	//   course=NAN + airspeed_direction=NAN → NPFG PD loop skipped entirely
@@ -2858,8 +2873,9 @@ FixedWingModeManager::control_strike(const float control_interval)
 	static uint32_t _strike_log_ctr = 0;
 
 	if ((_strike_log_ctr++ % 25u) == 0u) {
-		PX4_INFO("Strike: R=[%.0f,%.0f,%.0f]m Vc=%.1fm/s a_lat=%.2f pitch=%.1f deg",
+		PX4_INFO("Strike: R=[%.0f,%.0f,%.0f]m Rh=%.0fm Vc=%.1fm/s a_lat=%.2f pitch=%.1fdeg",
 			 (double)R(0), (double)R(1), (double)R(2),
+			 (double)R2d_mag,
 			 (double)V_closing,
 			 (double)a_lat_clamped,
 			 (double)math::degrees(pitch_direct));
