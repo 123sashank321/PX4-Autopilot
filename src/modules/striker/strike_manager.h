@@ -107,11 +107,10 @@ private:
 	// Subscriptions
 	uORB::SubscriptionCallbackWorkItem _vehicle_command_sub{this, ORB_ID(vehicle_command)};
 
-
-
 	uORB::Subscription _vehicle_status_sub{ORB_ID(vehicle_status)};
 	uORB::Subscription _home_position_sub{ORB_ID(home_position)};
 	uORB::Subscription _global_pos_sub{ORB_ID(vehicle_global_position)};
+	uORB::Subscription _local_pos_sub{ORB_ID(vehicle_local_position)};
 
 	// Publications
 	uORB::Publication<strike_target_s> _strike_target_pub{ORB_ID(strike_target)};
@@ -126,11 +125,20 @@ private:
 	// Strike state tracking (for watchdog)
 	bool _strike_active{false};
 
-	// Helper to convert LLA to NED
+	// Helper: convert geodetic to local NED
 	bool global_to_local(double lat, double lon, float alt, matrix::Vector3f &ned);
 
+	// Compute IP / AHP geometry and fill strike_target_s fields
+	void compute_geometry(const matrix::Vector3f &target_ned,
+			      const matrix::Vector3f &vehicle_ned,
+			      strike_target_s &msg);
+
 	DEFINE_PARAMETERS(
-		(ParamFloat<px4::params::STR_REC_ALT>) _param_str_rec_alt
+		(ParamFloat<px4::params::STR_REC_ALT>)    _param_str_rec_alt,
+		(ParamFloat<px4::params::STR_IP_ALT>)     _param_str_ip_alt,
+		(ParamFloat<px4::params::STR_DIVE_ANG>)   _param_str_dive_ang,
+		(ParamFloat<px4::params::STR_SETTLE_T>)   _param_str_settle_t,
+		(ParamFloat<px4::params::STR_CRUISE_SPD>) _param_str_cruise_spd
 	)
 
 };

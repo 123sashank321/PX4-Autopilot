@@ -2758,16 +2758,21 @@ FixedWingModeManager::control_strike(const float control_interval)
 
 	const hrt_abstime now = hrt_absolute_time();
 
-	// Lateral setpoint — course=NAN, airspeed_direction=NAN bypasses NPFG entirely
+	// ── Lateral setpoint ─────────────────────────────────────────────────────
+	// INGRESS/ALIGNMENT: course is finite → NPFG tracks bearing, lateral_accel ignored
+	// TERMINAL:          course = NAN    → NPFG bypassed, lateral_accel used directly
 	fixed_wing_lateral_setpoint_s lat_sp{empty_lateral_control_setpoint};
-	lat_sp.timestamp            = now;
-	lat_sp.lateral_acceleration = out.lateral_acceleration;
+	lat_sp.timestamp             = now;
+	lat_sp.course                = out.course;               // NAN in TERMINAL
+	lat_sp.lateral_acceleration  = out.lateral_acceleration; // nonzero in TERMINAL
 	_lateral_ctrl_sp_pub.publish(lat_sp);
 
-	// Longitudinal setpoint — pitch_direct + throttle_direct bypass TECS entirely
+	// ── Longitudinal setpoint ─────────────────────────────────────────────────
+	// INGRESS/ALIGNMENT: altitude finite → TECS active, pitch_direct/throttle_direct = NAN
+	// TERMINAL:          altitude = NAN  → TECS bypassed, pitch_direct + throttle_direct active
 	const fixed_wing_longitudinal_setpoint_s long_sp = {
 		.timestamp           = now,
-		.altitude            = out.valid ? NAN : _current_altitude, // hold alt if no target
+		.altitude            = out.valid ? out.altitude : _current_altitude,
 		.height_rate         = NAN,
 		.equivalent_airspeed = NAN,
 		.pitch_direct        = out.pitch_direct,
@@ -2778,6 +2783,7 @@ FixedWingModeManager::control_strike(const float control_interval)
 	_flaps_setpoint    = 0.0f;
 	_spoilers_setpoint = 0.0f;
 }
+
 
 extern "C" __EXPORT int fw_mode_manager_main(int argc, char *argv[])
 {

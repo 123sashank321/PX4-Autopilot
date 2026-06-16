@@ -34,15 +34,14 @@
 /**
  * @file StrikeGuidance.hpp
  *
- * Fixed-wing APN strike guidance.
+ * Fixed-wing three-phase strike guidance.
  *
- * Computes lateral and longitudinal setpoints for a terminal strike run
- * on a stationary NED ground target using:
- *   - 2D horizontal Proportional Navigation for lateral (roll) guidance
- *   - Elevation angle for pitch guidance (points nose directly at target)
+ * Phase 1 — INGRESS:   NPFG course to Initial Point (IP) + TECS altitude hold
+ * Phase 2 — ALIGNMENT: NPFG course on IP→AHP attack bearing + TECS altitude hold
+ * Phase 3 — TERMINAL:  2D horizontal PN (lateral) + elevation angle (pitch), TECS bypassed
  *
- * Outputs are consumed by fw_lateral_longitudinal_control which bypasses
- * NPFG (course=NAN) and TECS (pitch_direct + throttle_direct finite).
+ * IP and AHP coordinates are pre-computed by the striker module at command
+ * reception and carried in the strike_target uORB message.
  */
 
 #pragma once
@@ -58,16 +57,42 @@ class StrikeGuidance
 {
 public:
 
-	/**
-	 * Output setpoints computed by compute().
-	 * Pass directly to fixed_wing_lateral_setpoint and
-	 * fixed_wing_longitudinal_setpoint topics.
-	 */
+	// ── Strike state machine ─────────────────────────────────────────────────
+	enum class State : uint8_t {
+		INGRESS   = 0,  ///< Fly to Initial Point at cruise altitude (NPFG + TECS)
+		ALIGNMENT = 1,  ///< Fly IP→AHP on attack bearing (NPFG + TECS)
+		TERMINAL  = 2,  ///< APN terminal dive (lateral_accel + pitch_direct)
+	};
+
+	// ── Setpoint bundle returned by compute() ───────────────────────────────
+	//
+	// control_strike() in FixedWingModeManager publishes these directly:
+	//
+	//  INGRESS / ALIGNMENT:
+	//    lateral_sp.course              = course          (finite → NPFG active)
+	//    lateral_sp.lateral_acceleration = 0              (unused)
+	//    long_sp.altitude               = altitude        (finite → TECS active)
+	//    long_sp.pitch_direct           = NAN             (unused)
+	//    long_sp.throttle_direct        = NAN             (TECS controls throttle)
+	//
+	//  TERMINAL:
+	//    lateral_sp.course              = NAN             (NPFG bypassed)
+	//    lateral_sp.lateral_acceleration = lateral_acceleration
+	//    long_sp.altitude               = NAN             (TECS bypassed)
+	//    long_sp.pitch_direct           = pitch_direct
+	//    long_sp.throttle_direct        = STRIKE_THROTTLE (1.0)
+	//
 	struct Output {
-		float lateral_acceleration{0.0f}; ///< [m/s²] FRD lateral — 0 = wings level (no target)
-		float pitch_direct{NAN};          ///< [rad]  NAN = let TECS hold altitude (no target)
-		float throttle_direct{NAN};       ///< [0-1]  NAN = let TECS control throttle (no target)
-		bool  valid{false};               ///< true = active target acquired and guidance running
+		// Lateral
+		float course{NAN};               ///< [rad] NED bearing — finite → NPFG active
+		float lateral_acceleration{0.f}; ///< [m/s²] FRD — used only in TERMINAL
+		// Longitudinal
+		float altitude{NAN};             ///< [m] AMSL for TECS — finite in INGRESS/ALIGNMENT
+		float pitch_direct{NAN};         ///< [rad] — finite only in TERMINAL
+		float throttle_direct{NAN};      ///< [0-1] — 1.0 only in TERMINAL
+		// Status
+		bool  valid{false};              ///< false = no target, hold altitude/wings level
+		State state{State::INGRESS};     ///< current phase (for logging/debugging)
 	};
 
 	StrikeGuidance()  = default;
@@ -76,26 +101,39 @@ public:
 	/**
 	 * @brief Compute strike guidance setpoints for this cycle.
 	 *
-	 * @param local_pos  Current vehicle local position (NED, m) and velocity (NED, m/s)
-	 * @param yaw        Current vehicle yaw [rad] (NED, from North)
-	 * @param airspeed_valid   True if EAS measurement is valid
-	 * @param airspeed_eas     Equivalent airspeed [m/s] (used only for logging)
-	 * @return Output    Setpoints to publish. valid=false if no target active.
+	 * @param local_pos  Current vehicle local position + velocity (NED)
+	 * @param yaw        Current vehicle yaw [rad] (NED from North)
+	 * @param airspeed_valid  True if EAS sensor reading is valid
+	 * @param airspeed_eas    Equivalent airspeed [m/s]
+	 * @return Output    Ready-to-publish setpoint bundle. valid=false → no target.
 	 */
 	Output compute(const vehicle_local_position_s &local_pos,
 		       float yaw,
 		       bool  airspeed_valid,
 		       float airspeed_eas);
 
+	/// Reset state machine (e.g. on abort or re-designation)
+	void reset() { _state = State::INGRESS; _last_log_rd = INT_MIN; }
+
+	State currentState() const { return _state; }
+
 private:
 
-	// PN tuning
-	static constexpr float PN_GAIN          = 4.0f;   ///< Navigation constant N
-	static constexpr float MAX_ROLL_DEG     = 60.0f;  ///< Max lateral accel clamp [deg equiv]
-	static constexpr float MAX_PITCH_DEG    = 45.0f;  ///< Max pitch command [deg]
-	static constexpr float STRIKE_THROTTLE  = 1.0f;   ///< Full throttle during strike run
+	// ── PN tuning constants ──────────────────────────────────────────────────
+	static constexpr float PN_GAIN         = 4.0f;  ///< Navigation constant N
+	static constexpr float MAX_ROLL_DEG    = 60.0f; ///< Max lateral accel equiv [deg]
+	static constexpr float MAX_PITCH_DEG   = 45.0f; ///< Max pitch command [deg]
+	static constexpr float STRIKE_THROTTLE = 1.0f;  ///< Full throttle during APN dive
 
+	// ── Ingress / Alignment thresholds ──────────────────────────────────────
+	static constexpr float WP_ACCEPT_RADIUS = 50.0f;  ///< [m] waypoint acceptance circle
+	static constexpr float ALT_TOLERANCE    = 10.0f;  ///< [m] altitude must-be-met window
+	static constexpr float LOITER_RADIUS    = 150.0f; ///< [m] holding orbit radius at IP
+
+	// ── State ────────────────────────────────────────────────────────────────
+	State _state{State::INGRESS};
+	int   _last_log_rd{INT_MIN}; ///< Last Rd milestone index logged (TERMINAL phase)
+
+	// ── uORB ─────────────────────────────────────────────────────────────────
 	uORB::Subscription _strike_target_sub{ORB_ID(strike_target)};
-
-	int      _last_log_rd{INT_MIN}; ///< Last Rd milestone index at which debug was printed
 };

@@ -172,22 +172,37 @@ void StrikeManager::handle_vehicle_command(const vehicle_command_s *vehicle_comm
 			}
 
 		} else { // STRIKE
-			// Update Target State
-			matrix::Vector3f ned;
-			if (global_to_local(lat, lon, alt, ned)) {
+			matrix::Vector3f target_ned;
+
+			if (global_to_local(lat, lon, alt, target_ned)) {
+				// Snapshot vehicle NED position at command reception time
+				vehicle_local_position_s local_pos{};
+				matrix::Vector3f vehicle_ned(0.f, 0.f, 0.f);
+
+				if (_local_pos_sub.copy(&local_pos)) {
+					vehicle_ned = matrix::Vector3f(local_pos.x, local_pos.y, local_pos.z);
+				}
+
 				strike_target.active = true;
-				strike_target.x = ned(0);
-				strike_target.y = ned(1);
-				strike_target.z = ned(2);
+				strike_target.x = target_ned(0);
+				strike_target.y = target_ned(1);
+				strike_target.z = target_ned(2);
+
+				// Compute IP / AHP and fill geometry fields
+				compute_geometry(target_ned, vehicle_ned, strike_target);
 
 				_strike_active = true;
-
 				_strike_target_pub.publish(strike_target);
 				_strike_target_count++;
 
-				mavlink_log_info(&_mavlink_log_pub, "STRIKE: %.4f, %.4f @ %.0fm", lat, lon, static_cast<double>(alt));
-				PX4_INFO("Published STRIKE target #%u: x=%.2f, y=%.2f, z=%.2f",
-					 (unsigned)_strike_target_count, (double)ned(0), (double)ned(1), (double)ned(2));
+				mavlink_log_info(&_mavlink_log_pub, "STRIKE: %.4f, %.4f @ %.0fm", lat, lon,
+						 static_cast<double>(alt));
+				PX4_INFO("STRIKE target #%u: x=%.1f y=%.1f z=%.1f | IP=(%.1f,%.1f) AHP=(%.1f,%.1f) xk=%.1fm",
+					 (unsigned)_strike_target_count,
+					 (double)target_ned(0), (double)target_ned(1), (double)target_ned(2),
+					 (double)strike_target.ip_x,  (double)strike_target.ip_y,
+					 (double)strike_target.ahp_x, (double)strike_target.ahp_y,
+					 (double)strike_target.x_kinematic);
 			} else {
 				mavlink_log_critical(&_mavlink_log_pub, "Strike Failed: Invalid Home Position");
 			}
@@ -228,6 +243,57 @@ bool StrikeManager::global_to_local(double lat, double lon, float alt, matrix::V
 	}
 
 	return false;
+}
+
+void StrikeManager::compute_geometry(const matrix::Vector3f &target_ned,
+				      const matrix::Vector3f &vehicle_ned,
+				      strike_target_s &msg)
+{
+	// --- Parameters ---
+	const float ip_alt_agl  = _param_str_ip_alt.get();                    // [m] AGL
+	const float dive_ang    = math::radians(_param_str_dive_ang.get());   // [rad]
+	const float settle_t    = _param_str_settle_t.get();                  // [s]
+	const float cruise_spd  = _param_str_cruise_spd.get();               // [m/s]
+
+	// --- Horizontal dive reach ---
+	// x_kinematic: horizontal distance from target where APN dive starts
+	const float x_kinematic = ip_alt_agl / tanf(math::max(dive_ang, 0.01f));
+
+	// x_buffer: additional standoff for the ALIGNMENT settling run
+	const float x_buffer = cruise_spd * settle_t;
+
+	// --- 2D approach unit vector: from target toward vehicle ---
+	// This determines which direction the IP/AHP are placed behind the target
+	// (i.e., the aircraft approaches from its current position side)
+	const matrix::Vector2f target2d(target_ned(0), target_ned(1));
+	const matrix::Vector2f vehicle2d(vehicle_ned(0), vehicle_ned(1));
+	matrix::Vector2f approach = vehicle2d - target2d;
+
+	const float approach_mag = approach.norm();
+
+	if (approach_mag < 1.0f) {
+		// Vehicle is directly above target — default to North approach
+		approach = matrix::Vector2f(1.0f, 0.0f);
+
+	} else {
+		approach = approach / approach_mag;  // normalize
+	}
+
+	// --- IP and AHP NED positions ---
+	// IP:  x_kinematic + x_buffer from target, at ip_alt_agl above target
+	// AHP: x_kinematic from target, same altitude
+	// NED-z convention: negative = above home (ip_alt_agl above ground = -ip_alt_agl in NED)
+	const float ip_z = target_ned(2) - ip_alt_agl;  // target z (≈0) minus altitude above
+
+	msg.ip_x = target2d(0) + approach(0) * (x_kinematic + x_buffer);
+	msg.ip_y = target2d(1) + approach(1) * (x_kinematic + x_buffer);
+	msg.ip_z = ip_z;
+
+	msg.ahp_x = target2d(0) + approach(0) * x_kinematic;
+	msg.ahp_y = target2d(1) + approach(1) * x_kinematic;
+	msg.ahp_z = ip_z;  // same altitude as IP
+
+	msg.x_kinematic = x_kinematic;
 }
 
 
