@@ -96,5 +96,5 @@ private:
 
 	uORB::Subscription _strike_target_sub{ORB_ID(strike_target)};
 
-	uint32_t _log_counter{0};
+	float    _last_log_rd{-999.0f}; ///< Last Rd [m] at which debug was printed
 };
