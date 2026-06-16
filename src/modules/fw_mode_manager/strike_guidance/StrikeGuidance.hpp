@@ -92,7 +92,7 @@ private:
 	static constexpr float PN_GAIN          = 4.0f;   ///< Navigation constant N
 	static constexpr float MAX_ROLL_DEG     = 60.0f;  ///< Max lateral accel clamp [deg equiv]
 	static constexpr float MAX_PITCH_DEG    = 45.0f;  ///< Max pitch command [deg]
-	static constexpr float STRIKE_THROTTLE  = 0.80f;  ///< Fixed strike throttle [0-1]
+	static constexpr float STRIKE_THROTTLE  = 1.0f;   ///< Full throttle during strike run
 
 	uORB::Subscription _strike_target_sub{ORB_ID(strike_target)};
 
