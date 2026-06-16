@@ -210,14 +210,23 @@ int StrikeManager::custom_command(int argc, char *argv[])
 bool StrikeManager::global_to_local(double lat, double lon, float alt, matrix::Vector3f &ned)
 {
 	home_position_s home;
+
 	if (_home_position_sub.copy(&home) && home.valid_lpos) {
 		MapProjection map_ref(home.lat, home.lon);
 		float x, y;
 		map_ref.project(lat, lon, x, y);
-		float z = -(alt - home.alt); // Altitude to NED Z (down is positive)
+
+		// If alt=0 was sent (common for "ground strike" with omitted altitude),
+		// treat as ground level = home.alt so NED z = 0 (not -950m underground).
+		// Without this: z = -(0 - 950) = +950  →  target 950m underground
+		//   → R[2] ≈ 1050m, elevation angle -51° → pitch always saturated at -45°.
+		const float target_amsl = (alt < 1.0f) ? static_cast<float>(home.alt) : alt;
+		const float z = -(target_amsl - static_cast<float>(home.alt));
+
 		ned = matrix::Vector3f(x, y, z);
 		return true;
 	}
+
 	return false;
 }
 
