@@ -2773,7 +2773,7 @@ FixedWingModeManager::control_strike(const float control_interval)
 	const fixed_wing_longitudinal_setpoint_s long_sp = {
 		.timestamp           = now,
 		.altitude            = out.valid ? out.altitude : _current_altitude,
-		.height_rate         = NAN,
+		.height_rate         = out.height_rate,   // NAN normally; -10m/s during INGRESS descent
 		.equivalent_airspeed = NAN,
 		.pitch_direct        = out.pitch_direct,
 		.throttle_direct     = out.throttle_direct

@@ -278,12 +278,13 @@ void StrikeManager::compute_geometry(const matrix::Vector3f &target_ned,
 				       ? delta_alt / tanf(math::max(descent_ang, 0.01f))
 				       : 0.0f;
 
-	// Use whichever is larger: settle buffer or descent-driven standoff
-	const float x_ip_total = x_kinematic + math::max(x_buffer, x_descent);
+	// IP distance: x_kinematic (dive reach) + x_buffer (alignment settle).
+	// Fast descent during INGRESS is handled via height_rate setpoint in
+	// StrikeGuidance, not by extending IP distance.
+	const float x_ip_total = x_kinematic + x_buffer;
 
-	PX4_INFO("Geometry: xk=%.0fm x_buf=%.0fm x_desc=%.0fm total_IP=%.0fm (dAlt=%.0fm@%.0fdeg)",
-		 (double)x_kinematic, (double)x_buffer, (double)x_descent, (double)x_ip_total,
-		 (double)delta_alt, (double)_param_str_descent_ang.get());
+	PX4_INFO("Geometry: xk=%.0fm x_buf=%.0fm total_IP=%.0fm",
+		 (double)x_kinematic, (double)x_buffer, (double)x_ip_total);
 
 	// --- 2D approach unit vector: from target toward vehicle at command time ---
 	const matrix::Vector2f target2d(target_ned(0), target_ned(1));

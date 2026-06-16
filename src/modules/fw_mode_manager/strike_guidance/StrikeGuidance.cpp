@@ -83,46 +83,55 @@ StrikeGuidance::compute(const vehicle_local_position_s &local_pos,
 
 	// ─────────────────────────────────────────────────────────────────────────
 	case State::INGRESS: {
-	// Fly to the Initial Point (IP) at ip_alt_amsl using NPFG + TECS.
-	// If IP is reached but altitude not yet met, orbit at IP until altitude OK.
+	// Fly to the Initial Point (IP).
+	//
+	// Descent strategy (two-tier):
+	//   A. Well above IP alt (err > INGRESS_DESCENT_THRESH):
+	//      altitude=NAN + height_rate=-INGRESS_DESCENT_RATE
+	//      → TECS drives aggressive sink (~10 m/s) regardless of course
+	//   B. Near IP alt (err ≤ INGRESS_DESCENT_THRESH):
+	//      altitude=ip_alt_amsl + height_rate=NAN
+	//      → TECS holds altitude precisely
+	//
+	// Lateral: fly toward IP; orbit at IP if altitude not yet met.
 	// ─────────────────────────────────────────────────────────────────────────
 
-		out.altitude = ip_alt_amsl;  // TECS target altitude
+		if (alt_error > INGRESS_DESCENT_THRESH) {
+			// Far above IP altitude — aggressive descent, TECS height_rate mode
+			out.altitude    = NAN;
+			out.height_rate = -INGRESS_DESCENT_RATE;
+		} else {
+			// Near or at IP altitude — switch to precise altitude hold
+			out.altitude    = ip_alt_amsl;
+			out.height_rate = NAN;
+		}
 
 		if (dist_to_ip > WP_ACCEPT_RADIUS) {
-			// ── A. En-route to IP: course = bearing toward IP
+			// ── A. En-route to IP: fly straight toward it
 			out.course = atan2f(ip2d(1) - pos2d(1), ip2d(0) - pos2d(0));
-			PX4_DEBUG("Strike INGRESS: d_ip=%.0fm alt_err=%.1fm", (double)dist_to_ip, (double)alt_error);
 
 		} else if (fabsf(alt_error) > ALT_TOLERANCE) {
-			// ── B. At IP position, altitude not met → NPFG orbit
-			// Tangential direction (CCW, 90° from radial outward)
-			const Vector2f radial = pos2d - ip2d;
+			// ── B. At IP position, altitude not yet met → orbit (CCW)
+			const Vector2f radial    = pos2d - ip2d;
 			const float    radial_mag = radial.norm();
-
-			if (radial_mag > 1.0f) {
-				// Tangential CCW: rotate radial 90° CCW = (-y, x) / mag
-				out.course = atan2f(radial(0), -radial(1));  // CCW tangent
-			} else {
-				// Centre of orbit — fly east to establish orbit
-				out.course = 0.0f;
-			}
-
-			PX4_DEBUG("Strike INGRESS loiter: alt_err=%.1fm orbit_r=%.0fm",
-				  (double)alt_error, (double)radial_mag);
+			out.course = (radial_mag > 1.0f)
+				     ? atan2f(radial(0), -radial(1))   // CCW tangent
+				     : 0.0f;                            // nudge east
 
 		} else {
 			// ── C. IP reached at correct altitude → ALIGNMENT
 			_state = State::ALIGNMENT;
 			PX4_INFO("Strike: IP reached (d=%.0fm alt_err=%.1fm) → ALIGNMENT",
 				 (double)dist_to_ip, (double)alt_error);
-			// Fall through immediately to ALIGNMENT on this cycle
-			out.course   = atan2f(ahp2d(1) - ip2d(1), ahp2d(0) - ip2d(0));
-			out.altitude = ip_alt_amsl;
+			// Serve ALIGNMENT setpoint immediately
+			out.course      = atan2f(ahp2d(1) - ip2d(1), ahp2d(0) - ip2d(0));
+			out.altitude    = ip_alt_amsl;
+			out.height_rate = NAN;
 		}
 
 		break;
 	}
+
 
 	// ─────────────────────────────────────────────────────────────────────────
 	case State::ALIGNMENT: {
