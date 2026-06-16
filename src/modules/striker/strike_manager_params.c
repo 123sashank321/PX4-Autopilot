@@ -78,3 +78,21 @@ PARAM_DEFINE_FLOAT(STR_SETTLE_T, 3.0f);
  * @group Striker
  */
 PARAM_DEFINE_FLOAT(STR_CRUISE_SPD, 15.0f);
+
+/**
+ * Strike Ingress Descent Angle
+ *
+ * Expected TECS descent slope during Ingress. Used to compute how far back
+ * the IP must be placed so the aircraft descends to STR_IP_ALT before it
+ * arrives at the IP — avoiding a long loiter.
+ *   x_descent = (current_alt_AGL - STR_IP_ALT) / tan(STR_DESCENT_ANG)
+ *   IP placed at x_kinematic + max(x_buffer, x_descent) from target.
+ *
+ * @unit deg
+ * @min 3
+ * @max 30
+ * @decimal 1
+ * @increment 1
+ * @group Striker
+ */
+PARAM_DEFINE_FLOAT(STR_DESCENT_ANG, 10.0f);

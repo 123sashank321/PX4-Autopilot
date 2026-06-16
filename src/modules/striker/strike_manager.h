@@ -134,11 +134,12 @@ private:
 			      strike_target_s &msg);
 
 	DEFINE_PARAMETERS(
-		(ParamFloat<px4::params::STR_REC_ALT>)    _param_str_rec_alt,
-		(ParamFloat<px4::params::STR_IP_ALT>)     _param_str_ip_alt,
-		(ParamFloat<px4::params::STR_DIVE_ANG>)   _param_str_dive_ang,
-		(ParamFloat<px4::params::STR_SETTLE_T>)   _param_str_settle_t,
-		(ParamFloat<px4::params::STR_CRUISE_SPD>) _param_str_cruise_spd
+		(ParamFloat<px4::params::STR_REC_ALT>)     _param_str_rec_alt,
+		(ParamFloat<px4::params::STR_IP_ALT>)      _param_str_ip_alt,
+		(ParamFloat<px4::params::STR_DIVE_ANG>)    _param_str_dive_ang,
+		(ParamFloat<px4::params::STR_SETTLE_T>)    _param_str_settle_t,
+		(ParamFloat<px4::params::STR_CRUISE_SPD>)  _param_str_cruise_spd,
+		(ParamFloat<px4::params::STR_DESCENT_ANG>) _param_str_descent_ang
 	)
 
 };

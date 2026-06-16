@@ -250,21 +250,42 @@ void StrikeManager::compute_geometry(const matrix::Vector3f &target_ned,
 				      strike_target_s &msg)
 {
 	// --- Parameters ---
-	const float ip_alt_agl  = _param_str_ip_alt.get();                    // [m] AGL
-	const float dive_ang    = math::radians(_param_str_dive_ang.get());   // [rad]
-	const float settle_t    = _param_str_settle_t.get();                  // [s]
-	const float cruise_spd  = _param_str_cruise_spd.get();               // [m/s]
+	const float ip_alt_agl   = _param_str_ip_alt.get();                      // [m] AGL
+	const float dive_ang     = math::radians(_param_str_dive_ang.get());     // [rad]
+	const float settle_t     = _param_str_settle_t.get();                    // [s]
+	const float cruise_spd   = _param_str_cruise_spd.get();                 // [m/s]
+	const float descent_ang  = math::radians(_param_str_descent_ang.get()); // [rad]
 
-	// --- Horizontal dive reach ---
-	// x_kinematic: horizontal distance from target where APN dive starts
+	// --- Horizontal dive reach (fixed by target geometry) ---
 	const float x_kinematic = ip_alt_agl / tanf(math::max(dive_ang, 0.01f));
 
-	// x_buffer: additional standoff for the ALIGNMENT settling run
+	// --- Settle buffer (minimum standoff for ALIGNMENT bearing lock) ---
 	const float x_buffer = cruise_spd * settle_t;
 
-	// --- 2D approach unit vector: from target toward vehicle ---
-	// This determines which direction the IP/AHP are placed behind the target
-	// (i.e., the aircraft approaches from its current position side)
+	// --- Dynamic descent standoff ---
+	// If the aircraft is above ip_alt_agl at command reception, it needs to
+	// descend while flying toward IP. Compute the horizontal distance required
+	// at the planned TECS descent slope so it arrives at IP altitude before
+	// it arrives at IP position — eliminating loiter.
+	//
+	//   current_alt_AGL = -vehicle_ned(2)  (NED-z: negative = above home)
+	//   delta_alt       = current_alt_AGL  - ip_alt_agl
+	//   x_descent       = delta_alt / tan(STR_DESCENT_ANG)
+	//
+	const float current_alt_agl = math::max(-vehicle_ned(2), 0.0f);
+	const float delta_alt       = math::max(current_alt_agl - ip_alt_agl, 0.0f);
+	const float x_descent       = (delta_alt > 1.0f)
+				       ? delta_alt / tanf(math::max(descent_ang, 0.01f))
+				       : 0.0f;
+
+	// Use whichever is larger: settle buffer or descent-driven standoff
+	const float x_ip_total = x_kinematic + math::max(x_buffer, x_descent);
+
+	PX4_INFO("Geometry: xk=%.0fm x_buf=%.0fm x_desc=%.0fm total_IP=%.0fm (dAlt=%.0fm@%.0fdeg)",
+		 (double)x_kinematic, (double)x_buffer, (double)x_descent, (double)x_ip_total,
+		 (double)delta_alt, (double)_param_str_descent_ang.get());
+
+	// --- 2D approach unit vector: from target toward vehicle at command time ---
 	const matrix::Vector2f target2d(target_ned(0), target_ned(1));
 	const matrix::Vector2f vehicle2d(vehicle_ned(0), vehicle_ned(1));
 	matrix::Vector2f approach = vehicle2d - target2d;
@@ -272,26 +293,23 @@ void StrikeManager::compute_geometry(const matrix::Vector3f &target_ned,
 	const float approach_mag = approach.norm();
 
 	if (approach_mag < 1.0f) {
-		// Vehicle is directly above target — default to North approach
-		approach = matrix::Vector2f(1.0f, 0.0f);
-
+		approach = matrix::Vector2f(1.0f, 0.0f);  // default North if directly overhead
 	} else {
-		approach = approach / approach_mag;  // normalize
+		approach = approach / approach_mag;
 	}
 
-	// --- IP and AHP NED positions ---
-	// IP:  x_kinematic + x_buffer from target, at ip_alt_agl above target
-	// AHP: x_kinematic from target, same altitude
-	// NED-z convention: negative = above home (ip_alt_agl above ground = -ip_alt_agl in NED)
-	const float ip_z = target_ned(2) - ip_alt_agl;  // target z (≈0) minus altitude above
+	// --- NED-z: negative = above home (ip_alt_agl above ground → z = -ip_alt_agl) ---
+	const float ip_z = target_ned(2) - ip_alt_agl;
 
-	msg.ip_x = target2d(0) + approach(0) * (x_kinematic + x_buffer);
-	msg.ip_y = target2d(1) + approach(1) * (x_kinematic + x_buffer);
+	// IP: x_ip_total from target (accounts for descent + settle)
+	msg.ip_x = target2d(0) + approach(0) * x_ip_total;
+	msg.ip_y = target2d(1) + approach(1) * x_ip_total;
 	msg.ip_z = ip_z;
 
+	// AHP: exactly x_kinematic from target (terminal dive trigger point)
 	msg.ahp_x = target2d(0) + approach(0) * x_kinematic;
 	msg.ahp_y = target2d(1) + approach(1) * x_kinematic;
-	msg.ahp_z = ip_z;  // same altitude as IP
+	msg.ahp_z = ip_z;
 
 	msg.x_kinematic = x_kinematic;
 }
