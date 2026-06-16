@@ -98,6 +98,7 @@
 
 #include "strike_guidance/StrikeGuidance.hpp"
 #include <uORB/topics/strike_target.h>
+#include <lib/systemlib/mavlink_log.h>
 
 using namespace launchdetection;
 using namespace runwaytakeoff;
@@ -416,6 +417,7 @@ private:
 
 	// Strike guidance — runs when nav_state == NAVIGATION_STATE_STRIKE
 	StrikeGuidance _strike_guidance;
+	orb_advert_t   _strike_mavlink_log_pub{nullptr}; ///< MAVLink status text for strike phase transitions
 	void control_strike(const float control_interval);
 
 	// Update our local parameter cache.

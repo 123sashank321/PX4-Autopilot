@@ -87,23 +87,23 @@ StrikeGuidance::compute(const vehicle_local_position_s &local_pos,
 	//
 	// Descent strategy (two-tier):
 	//   A. Well above IP alt (err > INGRESS_DESCENT_THRESH):
-	//      altitude=NAN + height_rate=-INGRESS_DESCENT_RATE
-	//      → TECS drives aggressive sink (~10 m/s) regardless of course
+	//      pitch_direct = -DESCENT_PITCH_DEG  (bypasses TECS pitch, ~10-20 m/s sink)
+	//      altitude = NAN, throttle_direct = NAN  (TECS still controls throttle)
 	//   B. Near IP alt (err ≤ INGRESS_DESCENT_THRESH):
-	//      altitude=ip_alt_amsl + height_rate=NAN
-	//      → TECS holds altitude precisely
+	//      altitude = ip_alt_amsl, pitch_direct = NAN  (TECS altitude hold)
 	//
-	// Lateral: fly toward IP; orbit at IP if altitude not yet met.
+	// Lateral: NPFG course toward IP; orbit at IP when altitude not yet met.
 	// ─────────────────────────────────────────────────────────────────────────
 
 		if (alt_error > INGRESS_DESCENT_THRESH) {
-			// Far above IP altitude — aggressive descent, TECS height_rate mode
-			out.altitude    = NAN;
-			out.height_rate = -INGRESS_DESCENT_RATE;
+			// Far above IP altitude: bypass TECS pitch, command steep descent.
+			// TECS_SINK_MAX is irrelevant here — pitch is direct.
+			out.altitude     = NAN;
+			out.pitch_direct = -radians(DESCENT_PITCH_DEG);  // e.g. -20° nose-down
 		} else {
-			// Near or at IP altitude — switch to precise altitude hold
-			out.altitude    = ip_alt_amsl;
-			out.height_rate = NAN;
+			// Near IP altitude: TECS altitude hold, release pitch bypass
+			out.altitude     = ip_alt_amsl;
+			out.pitch_direct = NAN;
 		}
 
 		if (dist_to_ip > WP_ACCEPT_RADIUS) {
@@ -111,22 +111,22 @@ StrikeGuidance::compute(const vehicle_local_position_s &local_pos,
 			out.course = atan2f(ip2d(1) - pos2d(1), ip2d(0) - pos2d(0));
 
 		} else if (fabsf(alt_error) > ALT_TOLERANCE) {
-			// ── B. At IP position, altitude not yet met → orbit (CCW)
+			// ── B. At IP, altitude not yet met → CCW orbit
 			const Vector2f radial    = pos2d - ip2d;
 			const float    radial_mag = radial.norm();
 			out.course = (radial_mag > 1.0f)
-				     ? atan2f(radial(0), -radial(1))   // CCW tangent
-				     : 0.0f;                            // nudge east
+				     ? atan2f(radial(0), -radial(1))
+				     : 0.0f;
 
 		} else {
 			// ── C. IP reached at correct altitude → ALIGNMENT
 			_state = State::ALIGNMENT;
+			out.state_changed = true;
 			PX4_INFO("Strike: IP reached (d=%.0fm alt_err=%.1fm) → ALIGNMENT",
 				 (double)dist_to_ip, (double)alt_error);
-			// Serve ALIGNMENT setpoint immediately
-			out.course      = atan2f(ahp2d(1) - ip2d(1), ahp2d(0) - ip2d(0));
-			out.altitude    = ip_alt_amsl;
-			out.height_rate = NAN;
+			out.course       = atan2f(ahp2d(1) - ip2d(1), ahp2d(0) - ip2d(0));
+			out.altitude     = ip_alt_amsl;
+			out.pitch_direct = NAN;
 		}
 
 		break;
@@ -136,20 +136,15 @@ StrikeGuidance::compute(const vehicle_local_position_s &local_pos,
 	// ─────────────────────────────────────────────────────────────────────────
 	case State::ALIGNMENT: {
 	// Fly on the fixed attack bearing from IP to AHP.
-	// The bearing is locked to the IP→AHP vector computed at command reception.
-	// Transition to TERMINAL when horizontal distance to target ≤ x_kinematic.
 	// ─────────────────────────────────────────────────────────────────────────
 
-		// Fixed bearing: IP → AHP (computed from stored geometry, not live position)
 		out.course   = atan2f(ahp2d(1) - ip2d(1), ahp2d(0) - ip2d(0));
 		out.altitude = ip_alt_amsl;
 
-		PX4_DEBUG("Strike ALIGNMENT: d_target=%.0fm xk=%.0fm",
-			  (double)dist_to_target, (double)target.x_kinematic);
-
 		if (dist_to_target <= target.x_kinematic) {
 			_state = State::TERMINAL;
-			PX4_INFO("Strike: AHP crossed (d=%.0fm ≤ xk=%.0fm) → TERMINAL",
+			out.state_changed = true;
+			PX4_INFO("Strike: AHP crossed (d=%.0fm xk=%.0fm) → TERMINAL",
 				 (double)dist_to_target, (double)target.x_kinematic);
 		}
 

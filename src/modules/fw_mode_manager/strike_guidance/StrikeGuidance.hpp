@@ -88,11 +88,11 @@ public:
 		float lateral_acceleration{0.f}; ///< [m/s²] FRD — used only in TERMINAL
 		// Longitudinal
 		float altitude{NAN};             ///< [m] AMSL for TECS — finite in INGRESS/ALIGNMENT
-		float height_rate{NAN};          ///< [m/s] negative = descend — finite during fast descent
-		float pitch_direct{NAN};         ///< [rad] — finite only in TERMINAL
+		float pitch_direct{NAN};         ///< [rad] — finite in TERMINAL and INGRESS fast-descent
 		float throttle_direct{NAN};      ///< [0-1] — 1.0 only in TERMINAL
 		// Status
 		bool  valid{false};              ///< false = no target, hold altitude/wings level
+		bool  state_changed{false};      ///< true for exactly one cycle when state transitions
 		State state{State::INGRESS};     ///< current phase (for logging/debugging)
 	};
 
@@ -130,7 +130,7 @@ private:
 	static constexpr float WP_ACCEPT_RADIUS      = 50.0f;  ///< [m] waypoint acceptance circle
 	static constexpr float ALT_TOLERANCE          = 10.0f;  ///< [m] altitude must-be-met window
 	static constexpr float LOITER_RADIUS          = 150.0f; ///< [m] holding orbit radius at IP
-	static constexpr float INGRESS_DESCENT_RATE   = 10.0f;  ///< [m/s] aggressive sink rate during descent to IP alt
+	static constexpr float DESCENT_PITCH_DEG      = 20.0f;  ///< [deg] pitch-down during fast INGRESS descent (bypasses TECS pitch)
 	static constexpr float INGRESS_DESCENT_THRESH = 20.0f;  ///< [m] above this error: fast descent; below: altitude hold
 
 	// ── State ────────────────────────────────────────────────────────────────
