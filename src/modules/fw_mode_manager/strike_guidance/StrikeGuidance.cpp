@@ -104,12 +104,11 @@ StrikeGuidance::compute(const vehicle_local_position_s &local_pos,
 				      radians(-MAX_PITCH_DEG), radians(MAX_PITCH_DEG));
 
 	// --- 5. Debug: log once per 5m of descent (Rd = 340, 335, ..., 5, 0) ---
-	// floorf(Rd / 5) * 5 snaps to the nearest 5m floor.
-	// When Rd first drops below 5m, milestone = 0 → logs at the impact point.
-	const float rd_milestone = floorf(R(2) / 5.0f) * 5.0f;
+	// Use integer index to avoid float == comparison (-Werror=float-equal).
+	const int rd_idx = static_cast<int>(floorf(R(2) / 5.0f));
 
-	if (rd_milestone != _last_log_rd) {
-		_last_log_rd = rd_milestone;
+	if (rd_idx != _last_log_rd) {
+		_last_log_rd = rd_idx;
 		const float V_closing = vel.dot(R) / R_mag;
 		PX4_INFO("Strike: Rh=%.0fm Rd=%.0fm Vc=%.1fm/s a_lat=%.2f pitch=%.1fdeg",
 			 (double)R2d_mag, (double)R(2),
@@ -117,6 +116,7 @@ StrikeGuidance::compute(const vehicle_local_position_s &local_pos,
 			 (double)a_lateral,
 			 (double)degrees(pitch));
 	}
+
 
 
 	return Output{

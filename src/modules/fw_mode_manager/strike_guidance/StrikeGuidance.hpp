@@ -47,6 +47,7 @@
 
 #pragma once
 
+#include <climits>
 #include <lib/mathlib/mathlib.h>
 #include <matrix/math.hpp>
 #include <uORB/Subscription.hpp>
@@ -96,5 +97,5 @@ private:
 
 	uORB::Subscription _strike_target_sub{ORB_ID(strike_target)};
 
-	float    _last_log_rd{-999.0f}; ///< Last Rd [m] at which debug was printed
+	int      _last_log_rd{INT_MIN}; ///< Last Rd milestone index at which debug was printed
 };
