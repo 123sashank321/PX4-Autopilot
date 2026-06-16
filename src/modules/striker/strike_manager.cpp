@@ -250,41 +250,23 @@ void StrikeManager::compute_geometry(const matrix::Vector3f &target_ned,
 				      strike_target_s &msg)
 {
 	// --- Parameters ---
-	const float ip_alt_agl   = _param_str_ip_alt.get();                      // [m] AGL
-	const float dive_ang     = math::radians(_param_str_dive_ang.get());     // [rad]
-	const float settle_t     = _param_str_settle_t.get();                    // [s]
-	const float cruise_spd   = _param_str_cruise_spd.get();                 // [m/s]
-	const float descent_ang  = math::radians(_param_str_descent_ang.get()); // [rad]
+	const float ip_alt_agl  = _param_str_ip_alt.get();                    // [m] AGL
+	const float dive_ang    = math::radians(_param_str_dive_ang.get());   // [rad]
+	const float settle_t    = _param_str_settle_t.get();                  // [s]
+	const float cruise_spd  = _param_str_cruise_spd.get();               // [m/s]
 
 	// --- Horizontal dive reach (fixed by target geometry) ---
 	const float x_kinematic = ip_alt_agl / tanf(math::max(dive_ang, 0.01f));
 
-	// --- Settle buffer (minimum standoff for ALIGNMENT bearing lock) ---
-	const float x_buffer = cruise_spd * settle_t;
-
-	// --- Dynamic descent standoff ---
-	// If the aircraft is above ip_alt_agl at command reception, it needs to
-	// descend while flying toward IP. Compute the horizontal distance required
-	// at the planned TECS descent slope so it arrives at IP altitude before
-	// it arrives at IP position — eliminating loiter.
-	//
-	//   current_alt_AGL = -vehicle_ned(2)  (NED-z: negative = above home)
-	//   delta_alt       = current_alt_AGL  - ip_alt_agl
-	//   x_descent       = delta_alt / tan(STR_DESCENT_ANG)
-	//
-	const float current_alt_agl = math::max(-vehicle_ned(2), 0.0f);
-	const float delta_alt       = math::max(current_alt_agl - ip_alt_agl, 0.0f);
-	const float x_descent       = (delta_alt > 1.0f)
-				       ? delta_alt / tanf(math::max(descent_ang, 0.01f))
-				       : 0.0f;
-
-	// IP distance: x_kinematic (dive reach) + x_buffer (alignment settle).
-	// Fast descent during INGRESS is handled via height_rate setpoint in
-	// StrikeGuidance, not by extending IP distance.
-	const float x_ip_total = x_kinematic + x_buffer;
+	// --- Settle buffer (standoff for ALIGNMENT bearing lock) ---
+	// Fast descent is handled in StrikeGuidance via height_rate setpoint,
+	// so IP distance stays compact regardless of current altitude.
+	const float x_buffer    = cruise_spd * settle_t;
+	const float x_ip_total  = x_kinematic + x_buffer;
 
 	PX4_INFO("Geometry: xk=%.0fm x_buf=%.0fm total_IP=%.0fm",
 		 (double)x_kinematic, (double)x_buffer, (double)x_ip_total);
+
 
 	// --- 2D approach unit vector: from target toward vehicle at command time ---
 	const matrix::Vector2f target2d(target_ned(0), target_ned(1));
