@@ -256,6 +256,7 @@ private:
 	float _current_altitude{0.f};
 
 	float _yaw{0.0f};
+	float _pitch{0.0f};
 	float _yawrate{0.0f};
 
 	float _body_acceleration_x{0.f};

@@ -62,6 +62,7 @@ public:
 		INGRESS   = 0,  ///< Fly to Initial Point at cruise altitude (NPFG + TECS)
 		ALIGNMENT = 1,  ///< Fly IP→AHP on attack bearing (NPFG + TECS)
 		TERMINAL  = 2,  ///< APN terminal dive (lateral_accel + pitch_direct)
+		RECOVERY  = 3,  ///< abort from terminal dive
 	};
 
 	// ── Setpoint bundle returned by compute() ───────────────────────────────
@@ -86,8 +87,11 @@ public:
 		// Lateral
 		float course{NAN};               ///< [rad] NED bearing — finite → NPFG active
 		float lateral_acceleration{0.f}; ///< [m/s²] FRD — used only in TERMINAL
+		bool  needs_loiter{false};       ///< true when IP orbit is needed
+		float loiter_center_x{0.f};      ///< IP position for navigateLoiter()
+		float loiter_center_y{0.f};      ///< IP position for navigateLoiter()
 		// Longitudinal
-		float altitude{NAN};             ///< [m] AMSL for TECS — finite in INGRESS/ALIGNMENT
+		float altitude{NAN};             ///< [m] AMSL for TECS — finite in INGRESS/ALIGNMENT level
 		float pitch_direct{NAN};         ///< [rad] — finite in TERMINAL and INGRESS fast-descent
 		float throttle_direct{NAN};      ///< [0-1] — 1.0 only in TERMINAL
 		// Status
@@ -110,13 +114,23 @@ public:
 	 */
 	Output compute(const vehicle_local_position_s &local_pos,
 		       float yaw,
+		       float current_pitch,
 		       bool  airspeed_valid,
-		       float airspeed_eas);
+		       float airspeed_eas,
+		       float airspeed_max);
 
 	/// Reset state machine (e.g. on abort or re-designation)
-	void reset() { _state = State::INGRESS; _last_log_rd = INT_MIN; }
+	void reset() {
+		_state = State::INGRESS;
+		_last_log_rd = INT_MIN;
+		_alignment_entry_time = 0;
+		_ip_orbit_entry_time  = 0;
+		_recovery_start_time  = 0;
+	}
 
 	State currentState() const { return _state; }
+
+	static constexpr float LOITER_RADIUS = 150.0f; ///< [m] holding orbit radius at IP
 
 private:
 
@@ -127,15 +141,29 @@ private:
 	static constexpr float STRIKE_THROTTLE = 1.0f;  ///< Full throttle during APN dive
 
 	// ── Ingress / Alignment thresholds ──────────────────────────────────────
-	static constexpr float WP_ACCEPT_RADIUS      = 50.0f;  ///< [m] waypoint acceptance circle
-	static constexpr float ALT_TOLERANCE          = 10.0f;  ///< [m] altitude must-be-met window
-	static constexpr float LOITER_RADIUS          = 150.0f; ///< [m] holding orbit radius at IP
-	static constexpr float DESCENT_PITCH_DEG      = 20.0f;  ///< [deg] pitch-down during fast INGRESS descent (bypasses TECS pitch)
-	static constexpr float INGRESS_DESCENT_THRESH = 20.0f;  ///< [m] above this error: fast descent; below: altitude hold
+	static constexpr float WP_ACCEPT_RADIUS      = 50.0f;   ///< [m] waypoint acceptance circle
+	static constexpr float ALT_TOLERANCE          = 10.0f;   ///< [m] altitude must-be-met window
+	static constexpr float DESCENT_PITCH_DEG      = 20.0f;   ///< [deg] pitch-down during fast INGRESS descent
+	static constexpr float INGRESS_DESCENT_THRESH = 20.0f;   ///< [m] above this error: fast descent; below: altitude hold
+
+	// ── Safety ────────────────────────────────────────────────────────────────
+	static constexpr float ALIGNMENT_TIMEOUT_S   = 60.0f;   ///< [s] timeout for alignment phase
+	static constexpr float IP_ORBIT_TIMEOUT_S    = 120.0f;  ///< [s] timeout for IP orbit
+	static constexpr float VNE_MARGIN_MPS        = 5.0f;    ///< [m/s] below VNE to trigger recovery
+	static constexpr float DESCENT_THROTTLE_FAST = 0.3f;    ///< reduced throttle during pitch bypass
+	static constexpr float RECOVERY_RAMP_TIME_S  = 2.0f;    ///< [s] seconds to ramp to level
+	static constexpr float RECOVERY_PITCH_TARGET = 0.05f;   ///< [rad] ~3 deg nose up
+	static constexpr float RECOVERY_THROTTLE_IDLE = 0.3f;   ///< partial throttle during recovery
 
 	// ── State ────────────────────────────────────────────────────────────────
 	State _state{State::INGRESS};
-	int   _last_log_rd{INT_MIN}; ///< Last Rd milestone index logged (TERMINAL phase)
+	int   _last_log_rd{INT_MIN};
+
+	// ── Timers & Recovery ────────────────────────────────────────────────────
+	hrt_abstime _alignment_entry_time{0};
+	hrt_abstime _ip_orbit_entry_time{0};
+	hrt_abstime _recovery_start_time{0};
+	float       _recovery_pitch_start{NAN}; ///< Last Rd milestone index logged (TERMINAL phase)
 
 	// ── uORB ─────────────────────────────────────────────────────────────────
 	uORB::Subscription _strike_target_sub{ORB_ID(strike_target)};

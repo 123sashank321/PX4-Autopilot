@@ -247,6 +247,7 @@ FixedWingModeManager::vehicle_attitude_poll()
 		}
 
 		const Eulerf euler_angles(R);
+		_pitch = euler_angles(1);
 		_yaw = euler_angles(2);
 
 		const Vector3f body_acceleration = R.transpose() * Vector3f{_local_pos.ax, _local_pos.ay, _local_pos.az};
@@ -2754,18 +2755,36 @@ void
 FixedWingModeManager::control_strike(const float control_interval)
 {
 	const StrikeGuidance::Output out = _strike_guidance.compute(
-		_local_pos, _yaw, _airspeed_valid, _airspeed_eas);
+		_local_pos, _yaw, _pitch,
+		_airspeed_valid, _airspeed_eas,
+		_param_fw_airspd_max.get());
 
 	const hrt_abstime now = hrt_absolute_time();
 
 	// ── Lateral setpoint ─────────────────────────────────────────────────────
-	// ── Lateral setpoint ─────────────────────────────────────────────────────
-	// INGRESS/ALIGNMENT: course is finite → NPFG tracks bearing, lateral_accel ignored
-	// TERMINAL:          course = NAN    → NPFG bypassed, lateral_accel used directly
 	fixed_wing_lateral_setpoint_s lat_sp{empty_lateral_control_setpoint};
-	lat_sp.timestamp             = now;
-	lat_sp.course                = out.course;
-	lat_sp.lateral_acceleration  = out.lateral_acceleration;
+	lat_sp.timestamp = now;
+
+	if (out.needs_loiter) {
+		// INGRESS IP orbit: delegate to NPFG for wind compensation
+		const matrix::Vector2f ip_local(out.loiter_center_x, out.loiter_center_y);
+		const matrix::Vector2f vehicle_pos(_local_pos.x, _local_pos.y);
+		const matrix::Vector2f ground_speed(_local_pos.vx, _local_pos.vy);
+
+		const DirectionalGuidanceOutput npfg_out = navigateLoiter(
+			ip_local, vehicle_pos,
+			StrikeGuidance::LOITER_RADIUS,
+			true, // CCW
+			ground_speed, _wind_vel);
+
+		lat_sp.course               = npfg_out.course_setpoint;
+		lat_sp.lateral_acceleration = npfg_out.lateral_acceleration_feedforward;
+
+	} else {
+		lat_sp.course               = out.course;
+		lat_sp.lateral_acceleration = out.lateral_acceleration;
+	}
+
 	_lateral_ctrl_sp_pub.publish(lat_sp);
 
 	// ── Longitudinal setpoint ─────────────────────────────────────────────────
