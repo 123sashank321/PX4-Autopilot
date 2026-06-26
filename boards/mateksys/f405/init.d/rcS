@@ -1,0 +1,31 @@
+#!/bin/sh
+# MatekSys F405 - Fixed-Wing startup script
+
+set +e
+
+# IMU - ICM42688-P on SPI1
+icm42688p start -s -b 1 -R 0
+
+# Barometer - SPL06-001 on I2C1
+spl06 start -X -b 1
+
+# RC input
+rc_input start
+
+# MAVLink on USB VCP
+mavlink start -d /dev/ttyACM0 -b 57600 -r 1000 -m normal
+
+# FW flight stack
+sensors start
+attitude_estimator_q start
+fw_rate_control start
+fw_att_control start
+fw_lateral_longitudinal_control start
+fw_mode_manager start
+flight_mode_manager start
+land_detector start fixedwing
+airspeed_selector start
+control_allocator start
+commander start
+
+mavlink boot_complete

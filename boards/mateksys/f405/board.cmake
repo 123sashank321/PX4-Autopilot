@@ -1,0 +1,5 @@
+set(BOARD_VENDOR mateksys)
+set(BOARD_MODEL f405)
+set(CONFIG_ARCH_CHIP_STM32F405RG "y")
+add_compile_options(-Os -ffunction-sections -fdata-sections)
+set(UPLOAD_METHOD dfu)
