@@ -1,6 +1,6 @@
 MEMORY
 {
-    flash (rx)   : ORIGIN = 0x08000000, LENGTH = 1024K
+    flash (rx)   : ORIGIN = 0x08004000, LENGTH = 1008K  /* Reserve first 16K (sector 0) for PX4 bootloader */
     sram (rwx)   : ORIGIN = 0x20000000, LENGTH = 128K
     ccsram (rwx) : ORIGIN = 0x20020000, LENGTH = 64K
 }
