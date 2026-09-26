@@ -1,6 +1,6 @@
 ############################################################################
 #
-#   Copyright (c) 2015-2025 PX4 Development Team. All rights reserved.
+#   Copyright (c) 2026 PX4 Development Team. All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -31,40 +31,13 @@
 #
 ############################################################################
 
-add_subdirectory(launchdetection)
-add_subdirectory(runway_takeoff)
-add_subdirectory(strike_guidance)
-
-set(POSCONTROL_DEPENDENCIES
-	launchdetection
-	npfg
-	runway_takeoff
-	strike_guidance
-	SlewRate
-	tecs
-	motion_planning
-	performance_model
-	Sticks
-)
-
-if(CONFIG_FIGURE_OF_EIGHT)
-	add_subdirectory(figure_eight)
-	set(POSCONTROL_DEPENDENCIES
-		${POSCONTROL_DEPENDENCIES}
-		figure_eight
-	)
-endif()
-
-
-
 px4_add_module(
-	MODULE modules__fw_mode_manager
-	MAIN fw_mode_manager
+	MODULE modules__striker
+	MAIN striker
 	SRCS
-		FixedWingModeManager.cpp
-		FixedWingModeManager.hpp
-		ControllerConfigurationHandler.cpp
-		ControllerConfigurationHandler.hpp
+		strike_manager.cpp
+	MODULE_CONFIG
+		module.yaml
 	DEPENDS
-		${POSCONTROL_DEPENDENCIES}
-	)
+		px4_work_queue
+)

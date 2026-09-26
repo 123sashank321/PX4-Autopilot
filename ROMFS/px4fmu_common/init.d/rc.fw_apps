@@ -20,10 +20,16 @@ fw_lat_lon_control start
 airspeed_selector start
 
 #
+# Start Flight Mode Manager (for Strike task support)
+#
+#flight_mode_manager start
+
+# Start Strike Manager
+striker start
+#
 # Start attitude control auto-tuner
 #
 fw_autotune_attitude_control start
-
 #
 # Start Land Detector.
 #

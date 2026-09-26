@@ -247,6 +247,7 @@ FixedWingModeManager::vehicle_attitude_poll()
 		}
 
 		const Eulerf euler_angles(R);
+		_pitch = euler_angles(1);
 		_yaw = euler_angles(2);
 
 		const Vector3f body_acceleration = R.transpose() * Vector3f{_local_pos.ax, _local_pos.ay, _local_pos.az};
@@ -366,6 +367,12 @@ FixedWingModeManager::set_control_mode_current(const hrt_abstime &now)
 	if (_vehicle_status.vehicle_type == vehicle_status_s::VEHICLE_TYPE_ROTARY_WING && !_vehicle_status.in_transition_mode) {
 		_control_mode_current = FW_POSCTRL_MODE_OTHER;
 		return; // do not publish the setpoint
+	}
+
+	// Strike mode: intercept before any other auto/manual branch
+	if (_vehicle_status.nav_state == vehicle_status_s::NAVIGATION_STATE_STRIKE) {
+		_control_mode_current = FW_POSCTRL_MODE_STRIKE;
+		return;
 	}
 
 	const FW_POSCTRL_MODE previous_position_control_mode = _control_mode_current;
@@ -2210,6 +2217,11 @@ FixedWingModeManager::Run()
 				break;
 			}
 
+		case FW_POSCTRL_MODE_STRIKE: {
+				control_strike(control_interval);
+				break;
+			}
+
 		case FW_POSCTRL_MODE_OTHER: {
 				break;
 			}
@@ -2738,6 +2750,77 @@ lateral-longitudinal controller and and controllers below that (attitude, rate).
 
 	return 0;
 }
+
+void
+FixedWingModeManager::control_strike(const float control_interval)
+{
+	const StrikeGuidance::Output out = _strike_guidance.compute(
+		_local_pos, _yaw, _pitch,
+		_airspeed_valid, _airspeed_eas,
+		_param_fw_airspd_max.get());
+
+	const hrt_abstime now = hrt_absolute_time();
+
+	// ── Lateral setpoint ─────────────────────────────────────────────────────
+	fixed_wing_lateral_setpoint_s lat_sp{empty_lateral_control_setpoint};
+	lat_sp.timestamp = now;
+
+	if (out.needs_loiter) {
+		// INGRESS IP orbit: delegate to NPFG for wind compensation
+		const matrix::Vector2f ip_local(out.loiter_center_x, out.loiter_center_y);
+		const matrix::Vector2f vehicle_pos(_local_pos.x, _local_pos.y);
+		const matrix::Vector2f ground_speed(_local_pos.vx, _local_pos.vy);
+
+		const DirectionalGuidanceOutput npfg_out = navigateLoiter(
+			ip_local, vehicle_pos,
+			StrikeGuidance::LOITER_RADIUS,
+			true, // CCW
+			ground_speed, _wind_vel);
+
+		lat_sp.course               = npfg_out.course_setpoint;
+		lat_sp.lateral_acceleration = npfg_out.lateral_acceleration_feedforward;
+
+	} else {
+		lat_sp.course               = out.course;
+		lat_sp.lateral_acceleration = out.lateral_acceleration;
+	}
+
+	_lateral_ctrl_sp_pub.publish(lat_sp);
+
+	// ── Longitudinal setpoint ─────────────────────────────────────────────────
+	// INGRESS fast-descent: pitch_direct=-20° + altitude=NAN (TECS throttle only)
+	// INGRESS level / ALIGNMENT: altitude finite, pitch_direct=NAN (full TECS)
+	// TERMINAL: pitch_direct + throttle_direct (TECS fully bypassed)
+	const fixed_wing_longitudinal_setpoint_s long_sp = {
+		.timestamp           = now,
+		.altitude            = out.valid ? out.altitude : _current_altitude,
+		.height_rate         = NAN,
+		.equivalent_airspeed = NAN,
+		.pitch_direct        = out.pitch_direct,
+		.throttle_direct     = out.throttle_direct
+	};
+	_longitudinal_ctrl_sp_pub.publish(long_sp);
+
+	// ── MAVLink GCS status text on phase transitions ──────────────────────────
+	if (out.state_changed) {
+		switch (out.state) {
+		case StrikeGuidance::State::ALIGNMENT:
+			mavlink_log_info(&_strike_mavlink_log_pub,
+					 "[Strike] IP reached → ALIGNMENT phase");
+			break;
+		case StrikeGuidance::State::TERMINAL:
+			mavlink_log_info(&_strike_mavlink_log_pub,
+					 "[Strike] AHP crossed → TERMINAL APN dive");
+			break;
+		default:
+			break;
+		}
+	}
+
+	_flaps_setpoint    = 0.0f;
+	_spoilers_setpoint = 0.0f;
+}
+
 
 extern "C" __EXPORT int fw_mode_manager_main(int argc, char *argv[])
 {

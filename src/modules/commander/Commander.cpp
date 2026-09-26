@@ -1541,6 +1541,9 @@ Commander::handle_command(const vehicle_command_s &cmd)
 		/* ignore commands that are handled by other parts of the system */
 		break;
 
+	case 31010: // MAV_CMD_USER_1 - handled by striker module, silently ignore
+		return false; // return false so no ack is sent from commander
+
 	default:
 		/* Warn about unsupported commands, this makes sense because only commands
 		 * to this component ID (or all) are passed by mavlink. */
@@ -1857,6 +1860,24 @@ void Commander::run()
 		if (_failure_detector.update(_vehicle_status, _vehicle_control_mode)) {
 			_vehicle_status.failure_detector_status = _failure_detector.getStatus().value;
 			_status_changed = true;
+		}
+
+		// Check for active Strike
+		strike_target_s strike_target;
+		if (_strike_target_sub.copy(&strike_target)) {
+			if (strike_target.active && (strike_target.action_type == 0)) {
+				// Strike is active, switch to Strike nav_state
+				if (_vehicle_status.nav_state != vehicle_status_s::NAVIGATION_STATE_STRIKE) {
+					_user_mode_intention.change(vehicle_status_s::NAVIGATION_STATE_STRIKE,
+						ModeChangeSource::User);
+					PX4_INFO("Strike activated, switching to NAVIGATION_STATE_STRIKE");
+				}
+			} else if (_vehicle_status.nav_state == vehicle_status_s::NAVIGATION_STATE_STRIKE) {
+				// Strike was deactivated or aborted, return to loiter
+				_user_mode_intention.change(vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER,
+					ModeChangeSource::User);
+				PX4_INFO("Strike deactivated, switching to AUTO_LOITER");
+			}
 		}
 
 		modeManagementUpdate();

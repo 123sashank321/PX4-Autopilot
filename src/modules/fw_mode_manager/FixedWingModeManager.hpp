@@ -96,6 +96,10 @@
 #include <uORB/topics/figure_eight_status.h>
 #endif // CONFIG_FIGURE_OF_EIGHT
 
+#include "strike_guidance/StrikeGuidance.hpp"
+#include <uORB/topics/strike_target.h>
+#include <lib/systemlib/mavlink_log.h>
+
 using namespace launchdetection;
 using namespace runwaytakeoff;
 using namespace time_literals;
@@ -233,6 +237,7 @@ private:
 		FW_POSCTRL_MODE_MANUAL_ALTITUDE,
 		FW_POSCTRL_MODE_TRANSITION_TO_HOVER_LINE_FOLLOW,
 		FW_POSCTRL_MODE_TRANSITION_TO_HOVER_HEADING_HOLD,
+		FW_POSCTRL_MODE_STRIKE,
 		FW_POSCTRL_MODE_OTHER
 	} _control_mode_current{FW_POSCTRL_MODE_OTHER}; // used to check if the mode has changed
 
@@ -251,6 +256,7 @@ private:
 	float _current_altitude{0.f};
 
 	float _yaw{0.0f};
+	float _pitch{0.0f};
 	float _yawrate{0.0f};
 
 	float _body_acceleration_x{0.f};
@@ -409,6 +415,11 @@ private:
 
 	void publishFigureEightStatus(const position_setpoint_s pos_sp);
 #endif // CONFIG_FIGURE_OF_EIGHT
+
+	// Strike guidance — runs when nav_state == NAVIGATION_STATE_STRIKE
+	StrikeGuidance _strike_guidance;
+	orb_advert_t   _strike_mavlink_log_pub{nullptr}; ///< MAVLink status text for strike phase transitions
+	void control_strike(const float control_interval);
 
 	// Update our local parameter cache.
 	void parameters_update();
