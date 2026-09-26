@@ -59,15 +59,13 @@ StrikeGuidance::compute(hrt_abstime now,
 	// than command a dive from garbage state.
 	if (!local_pos.xy_valid || !local_pos.z_valid || !local_pos.v_xy_valid) {
 		if (_state == State::TERMINAL) {
-			// Mid-dive: pull out rather than freeze.
-			if (!PX4_ISFINITE(_recovery_pitch_start)) {
-				// Seed from measured attitude, but clamp: current_pitch can be
-				// outside the configured envelope (tracking lag, gust) even
-				// though every commanded pitch is bounded to it.
-				_recovery_pitch_start = constrain(current_pitch, pitch_lim_min_rad, pitch_lim_max_rad);
-				_recovery_start_time  = now;
-			}
-
+			// Mid-dive: pull out rather than freeze. Seed exactly like the
+			// other TERMINAL->RECOVERY paths below: start the ramp now, from
+			// the live attitude. Guarding this on _recovery_pitch_start being
+			// NAN reused a previous RECOVERY's stale start pitch and left
+			// _recovery_start_time at 0, so the ramp completed instantly.
+			_recovery_pitch_start = NAN;   // seeded from live attitude below
+			_recovery_start_time  = now;
 			_state = State::RECOVERY;
 			PX4_WARN("Strike: local position invalid in TERMINAL → RECOVERY");
 
@@ -546,13 +544,21 @@ void StrikeGuidance::reset()
 			 (double)_cpa_3d, (double)_cpa_horizontal, (double)time_in_terminal_s);
 	}
 
+	// Return to the freshly-constructed state. Anything left behind here
+	// leaks into the next attempt: a stale _recovery_pitch_start skips the
+	// pull-out ramp, and stale reset tracking + _held_output can replay the
+	// previous strike's last setpoint (e.g. a full-throttle dive) on re-entry.
 	_state = State::INGRESS;
 	_ingress_attempts = 0;
 	_last_log_rd = INT_MIN;
 	_alignment_entry_time = 0;
 	_ip_orbit_entry_time  = 0;
 	_recovery_start_time  = 0;
+	_recovery_pitch_start = NAN;
+	_reset_tracking_init = false;
 	_reset_pending = false;
+	_reset_detected_time = 0;
+	_held_output = Output{};
 	_terminal_entry_time = 0;
 	_cpa_3d = NAN;
 	_cpa_horizontal = NAN;

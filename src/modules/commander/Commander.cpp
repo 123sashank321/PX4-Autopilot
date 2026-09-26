@@ -1874,7 +1874,7 @@ void Commander::run()
 				// (always FIXED_WING) and is what actually matters for a
 				// VTOL: without it, a strike commanded while the vehicle is
 				// still in steady rotary-wing hover would pass the
-				// transition check below, switch nav_state to STRIKE, and
+				// in_transition_mode check, switch nav_state to STRIKE, and
 				// then just sit there — FixedWingModeManager::set_control_mode_current()
 				// no-ops to FW_POSCTRL_MODE_OTHER for ROTARY_WING outside a
 				// transition, and nothing here commands a front-transition,

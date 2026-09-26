@@ -472,3 +472,92 @@ TEST_F(StrikeGuidanceTest, InvalidLocalPositionHoldsRatherThanCommandsGarbage)
 	EXPECT_FALSE(out.valid);
 	EXPECT_EQ(out.state, StrikeGuidance::State::INGRESS);
 }
+
+// Drives a fresh guidance instance through INGRESS -> ALIGNMENT -> TERMINAL
+// using the default publishTarget() geometry.
+static void reachTerminal(StrikeGuidanceTest &f, hrt_abstime &t, uint32_t designation_id)
+{
+	f.publishTarget(t, true, designation_id);
+	f.compute(t, f.makePos(500.f, 0.f, -100.f));   // at IP, on altitude -> ALIGNMENT
+	t += 100'000;
+	f.publishTarget(t, true, designation_id);
+	f.compute(t, f.makePos(90.f, 0.f, -100.f));    // inside x_kinematic -> TERMINAL
+}
+
+TEST_F(StrikeGuidanceTest, ResetAfterInterruptedTerminalRestartsAtIngress)
+{
+	// A strike interrupted mid-dive by a mode change never lets compute() see
+	// the target go away; FixedWingModeManager resets guidance on STRIKE
+	// entry/exit instead. The next designation must start from INGRESS, not
+	// resume the old TERMINAL dive toward the new target.
+	hrt_abstime t = START_TIME;
+	reachTerminal(*this, t, 1);
+	ASSERT_EQ(_guidance.currentState(), StrikeGuidance::State::TERMINAL);
+
+	_guidance.reset();   // what FixedWingModeManager does on mode exit/entry
+
+	t += 60'000'000;
+	publishTarget(t, true, 2);
+	const auto out = compute(t, makePos(3000.f, 0.f, -100.f));
+
+	EXPECT_TRUE(out.valid);
+	EXPECT_EQ(out.state, StrikeGuidance::State::INGRESS);
+	EXPECT_FALSE(PX4_ISFINITE(out.throttle_direct));
+}
+
+TEST_F(StrikeGuidanceTest, ResetDoesNotReplayPreviousStrikeOutputOnEkfCounterChange)
+{
+	// EKF reset counters advance freely while not in STRIKE. After reset(),
+	// guidance must re-latch them rather than read the change as a mid-strike
+	// reset and replay the previous strike's last (dive) setpoint.
+	hrt_abstime t = START_TIME;
+	reachTerminal(*this, t, 1);
+	t += 100'000;
+	publishTarget(t, true, 1);
+	const auto dive = compute(t, makePos(80.f, 0.f, -90.f));
+	ASSERT_EQ(dive.state, StrikeGuidance::State::TERMINAL);
+
+	_guidance.reset();
+
+	t += 60'000'000;
+	publishTarget(t - 50'000, true, 2);   // published just before the first compute, as in flight
+	auto pos = makePos(3000.f, 0.f, -100.f);
+	pos.xy_reset_counter = 3;
+	pos.z_reset_counter = 2;
+	const auto out = compute(t, pos);
+
+	EXPECT_EQ(out.state, StrikeGuidance::State::INGRESS);
+	EXPECT_FALSE(PX4_ISFINITE(out.throttle_direct));
+}
+
+TEST_F(StrikeGuidanceTest, RecoveryFromPositionLossRampsEvenAfterEarlierRecovery)
+{
+	// A completed RECOVERY must not leave state behind that makes a later
+	// position-loss RECOVERY skip its pull-out ramp.
+	hrt_abstime t = START_TIME;
+	reachTerminal(*this, t, 1);
+	t += 100'000;
+	publishTarget(t, false, 1);
+	compute(t, makePos(80.f, 0.f, -90.f), radians(-30.f));   // target lost -> RECOVERY
+	ASSERT_EQ(_guidance.currentState(), StrikeGuidance::State::RECOVERY);
+
+	for (int i = 0; i < 40 && _guidance.currentState() == StrikeGuidance::State::RECOVERY; i++) {
+		t += 100'000;
+		compute(t, makePos(80.f, 0.f, -90.f), radians(-10.f));
+	}
+
+	ASSERT_EQ(_guidance.currentState(), StrikeGuidance::State::INGRESS);
+
+	t += 1'000'000;
+	reachTerminal(*this, t, 2);
+	ASSERT_EQ(_guidance.currentState(), StrikeGuidance::State::TERMINAL);
+
+	t += 100'000;
+	publishTarget(t, true, 2);
+	auto lost = makePos(80.f, 0.f, -90.f);
+	lost.xy_valid = false;
+	const auto out = compute(t, lost, radians(-40.f));
+
+	EXPECT_EQ(_guidance.currentState(), StrikeGuidance::State::RECOVERY);
+	EXPECT_NEAR(math::degrees(out.pitch_direct), -40.f, 1.f);   // ramp starts at live attitude
+}

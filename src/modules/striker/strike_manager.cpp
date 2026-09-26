@@ -128,32 +128,27 @@ void StrikeManager::Run()
 	}
 
 	// 4. Watchdog for External Mode Changes (User pressed Hold/Pause)
-	vehicle_status_s status;
+	if (_vehicle_status_sub.update(&_vehicle_status)) {
+		// If we think we are striking, but the system is NOT in Strike mode,
+		// it means the user or system has switched modes (e.g. to Loiter, RTL, or Stick Override).
+		// We must update our internal state and notify listeners.
+		const bool grace_elapsed =
+			(hrt_elapsed_time(&_strike_requested_time) > STRIKE_MODE_GRACE_US);
 
-	if (_vehicle_status_sub.updated()) {
-		if (_vehicle_status_sub.copy(&status)) {
+		if (_strike_active && grace_elapsed
+		    && _vehicle_status.nav_state != vehicle_status_s::NAVIGATION_STATE_STRIKE) {
+			_strike_active = false;
 
-			// If we think we are striking, but the system is NOT in Strike mode,
-			// it means the user or system has switched modes (e.g. to Loiter, RTL, or Stick Override).
-			// We must update our internal state and notify listeners.
-			const bool grace_elapsed =
-				(hrt_elapsed_time(&_strike_requested_time) > STRIKE_MODE_GRACE_US);
+			strike_target_s abort_msg{};
+			abort_msg.timestamp = hrt_absolute_time();
+			abort_msg.active = false;
+			abort_msg.action_type = 1; // Abort
+			abort_msg.x = NAN;
+			abort_msg.y = NAN;
+			abort_msg.z = NAN;
 
-			if (_strike_active && grace_elapsed
-			    && status.nav_state != vehicle_status_s::NAVIGATION_STATE_STRIKE) {
-				_strike_active = false;
-
-				strike_target_s abort_msg{};
-				abort_msg.timestamp = hrt_absolute_time();
-				abort_msg.active = false;
-				abort_msg.action_type = 1; // Abort
-				abort_msg.x = NAN;
-				abort_msg.y = NAN;
-				abort_msg.z = NAN;
-
-				_strike_target_pub.publish(abort_msg);
-				PX4_INFO("Strike Aborted by External Mode Switch (To NavState: %d)", status.nav_state);
-			}
+			_strike_target_pub.publish(abort_msg);
+			PX4_INFO("Strike Aborted by External Mode Switch (To NavState: %d)", _vehicle_status.nav_state);
 		}
 	}
 
@@ -238,7 +233,23 @@ void StrikeManager::handle_vehicle_command(const vehicle_command_s *vehicle_comm
 		} else { // STRIKE
 			matrix::Vector3f target_ned;
 
-			if (global_to_local(lat, lon, alt, target_ned)) {
+			// Commander only enters STRIKE in established fixed-wing flight (see
+			// its strike arbitration). Accepting here anyway would ACK success,
+			// then the watchdog above would silently abort once
+			// STRIKE_MODE_GRACE_US passed -- e.g. a VTOL still hovering or
+			// mid-transition would report "accepted" and then do nothing.
+			// A plain fixed-wing is always FIXED_WING and never in transition.
+			const bool in_fw_flight =
+				(_vehicle_status.vehicle_type == vehicle_status_s::VEHICLE_TYPE_FIXED_WING)
+				&& !_vehicle_status.in_transition_mode;
+
+			if (!in_fw_flight) {
+				send_command_ack(*vehicle_command, vehicle_command_ack_s::VEHICLE_CMD_RESULT_TEMPORARILY_REJECTED);
+				mavlink_log_critical(&_mavlink_log_pub, "Strike rejected: not in fixed-wing flight");
+				PX4_WARN("Strike rejected: vehicle_type=%u in_transition=%d",
+					 (unsigned)_vehicle_status.vehicle_type, (int)_vehicle_status.in_transition_mode);
+
+			} else if (global_to_local(lat, lon, alt, target_ned)) {
 				// Snapshot vehicle NED position at command reception time
 				vehicle_local_position_s local_pos{};
 				matrix::Vector3f vehicle_ned(0.f, 0.f, 0.f);

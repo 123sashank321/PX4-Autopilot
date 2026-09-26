@@ -107,6 +107,7 @@ private:
 	uORB::SubscriptionCallbackWorkItem _vehicle_command_sub{this, ORB_ID(vehicle_command)};
 
 	uORB::Subscription _vehicle_status_sub{ORB_ID(vehicle_status)};
+	vehicle_status_s _vehicle_status{};  ///< latest, refreshed every Run() before commands are handled
 	uORB::Subscription _global_pos_sub{ORB_ID(vehicle_global_position)};
 	uORB::Subscription _local_pos_sub{ORB_ID(vehicle_local_position)};
 	// STR_* parameters are only re-read when this fires. Without it,

@@ -2137,6 +2137,19 @@ FixedWingModeManager::Run()
 
 		set_control_mode_current(now);
 
+		// StrikeGuidance only runs while in STRIKE, so it never sees the target
+		// go away when the mode is left some other way (RC mode switch, failsafe,
+		// VTOL back-transition). Without this, a strike interrupted mid-dive left
+		// the guidance in TERMINAL and the next designation dove straight at its
+		// target, skipping INGRESS/ALIGNMENT.
+		const bool strike_mode = (_control_mode_current == FW_POSCTRL_MODE_STRIKE);
+
+		if (strike_mode != _was_strike_mode) {
+			_strike_guidance.reset();
+			_strike_hold_altitude = NAN;
+			_was_strike_mode = strike_mode;
+		}
+
 		update_in_air_states(now);
 
 		// restore nominal TECS parameters in case changed intermittently (e.g. in landing handling)

@@ -421,6 +421,7 @@ private:
 	orb_advert_t   _strike_mavlink_log_pub{nullptr}; ///< MAVLink status text for strike phase transitions
 	void control_strike();
 	float _strike_hold_altitude{NAN}; ///< [m] latched altitude while guidance is invalid
+	bool _was_strike_mode{false};     ///< edge-detects STRIKE entry/exit to reset guidance
 
 	// Update our local parameter cache.
 	void parameters_update();

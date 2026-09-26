@@ -131,7 +131,8 @@ public:
 		       float pitch_lim_min_rad,
 		       float pitch_lim_max_rad);
 
-	/// Reset state machine (e.g. on abort or re-designation). Also reports the
+	/// Reset to the freshly-constructed state. Called internally on abort, and by
+	/// FixedWingModeManager on every STRIKE mode entry/exit. Also reports the
 	/// closest-approach distance achieved this attempt, if TERMINAL was ever
 	/// entered — see StrikeGuidance.cpp for why this isn't inline anymore.
 	void reset();

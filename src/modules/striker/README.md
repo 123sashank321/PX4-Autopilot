@@ -242,16 +242,28 @@ in `striker`/`Commander` commands a front-transition on its own, so the
 strike would never actually execute. Both checks together mean STRIKE is
 only enterable once the vehicle is already established in FW flight.
 
-A `MAV_CMD_USER_1` arriving while either condition fails is simply not acted
-on that cycle (it retries every cycle via the existing designation-id logic,
-same as any other transient rejection — see "Abort Behavior"). If a
-transition starts *while already in STRIKE* (e.g. a failsafe forces a
+A `MAV_CMD_USER_1` arriving while the vehicle is not in established FW
+flight is **rejected up front by `striker`**: it ACKs
+`TEMPORARILY_REJECTED` and sends `Strike rejected: not in fixed-wing flight`
+to the GCS. It is not deferred or retried — re-issue it once the
+front-transition has completed. (Before this check, `striker` ACKed the
+command as accepted, Commander silently declined to enter STRIKE, and the
+watchdog aborted the strike `STRIKE_MODE_GRACE_US` (1 s) later with no GCS
+feedback.) Commander's own check stays as a backstop for the narrow case
+where the vehicle leaves FW flight between acceptance and mode entry; the
+watchdog then aborts after the grace period.
+
+If a transition starts *while already in STRIKE* (e.g. a failsafe forces a
 back-transition), the same checks make the entry condition go false, and
 control falls straight into the existing "strike ended" branch — which
 restores whatever nav_state STRIKE interrupted, exactly as if the strike had
-been passively aborted. No separate mid-transition abort path was needed;
-the existing entry/exit branches already cover it once these checks are
-added to the entry condition.
+been passively aborted.
+
+However STRIKE is left, `FixedWingModeManager` resets `StrikeGuidance` on
+every STRIKE entry and exit. Guidance only runs while in STRIKE, so without
+this a strike interrupted mid-dive (RC mode switch, failsafe, VTOL
+back-transition) left the guidance in TERMINAL, and the next designation
+dove straight at its new target, skipping INGRESS/ALIGNMENT.
 
 For a plain (non-VTOL) fixed-wing airframe, `vehicle_type` is always
 `FIXED_WING` and `in_transition_mode` is always `false`, so neither check
@@ -331,11 +343,12 @@ striker stop
 Add `striker start` to `ROMFS/px4fmu_common/init.d/rc.fw_apps` (fixed-wing)
 or `ROMFS/px4fmu_common/init.d/rc.vtol_apps` (VTOL), matching the airframe.
 
-### `MAV_CMD_USER_1` rejected / ignored on a VTOL
-Expected if the vehicle is mid-transition — see "VTOL / Transition Gating".
-The command isn't dropped; it's simply not actionable that cycle. Re-issue
-it (or just wait — a mission-triggered strike naturally retries) once the
-front-transition to FW mode completes.
+### `Strike rejected: not in fixed-wing flight` on a VTOL
+Expected while the vehicle is hovering or mid-transition — see "VTOL /
+Transition Gating". The command is rejected, not queued: complete the
+front-transition to FW mode, then re-issue it. Note PX4 itself denies a
+front-transition while in Takeoff, Land, RTL or Orbit mode, so switch to
+Hold first after a VTOL takeoff.
 
 ### Vehicle flies over target without diving
 The terminal dive's pitch command is bounded by the airframe's own
