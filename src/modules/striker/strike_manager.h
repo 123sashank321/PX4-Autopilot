@@ -50,13 +50,12 @@
 #include <uORB/SubscriptionCallback.hpp>
 
 #include <uORB/topics/vehicle_command.h>
-#include <uORB/topics/vehicle_command.h>
 #include <uORB/topics/strike_target.h>
 #include <uORB/topics/vehicle_local_position.h>
 #include <uORB/topics/vehicle_global_position.h>
 #include <uORB/topics/vehicle_status.h>
-#include <uORB/topics/trajectory_setpoint.h>
-#include <uORB/topics/home_position.h>
+#include <uORB/topics/parameter_update.h>
+#include <uORB/topics/vehicle_command_ack.h>
 
 #include <lib/systemlib/mavlink_log.h>
 
@@ -108,12 +107,16 @@ private:
 	uORB::SubscriptionCallbackWorkItem _vehicle_command_sub{this, ORB_ID(vehicle_command)};
 
 	uORB::Subscription _vehicle_status_sub{ORB_ID(vehicle_status)};
-	uORB::Subscription _home_position_sub{ORB_ID(home_position)};
 	uORB::Subscription _global_pos_sub{ORB_ID(vehicle_global_position)};
 	uORB::Subscription _local_pos_sub{ORB_ID(vehicle_local_position)};
+	// STR_* parameters are only re-read when this fires. Without it,
+	// updateParams() runs once in init() and every later QGC change is
+	// silently ignored until reboot.
+	uORB::Subscription _parameter_update_sub{ORB_ID(parameter_update)};
 
 	// Publications
 	uORB::Publication<strike_target_s> _strike_target_pub{ORB_ID(strike_target)};
+	uORB::Publication<vehicle_command_ack_s> _command_ack_pub{ORB_ID(vehicle_command_ack)};
 
 
 	// Statistics
@@ -124,6 +127,33 @@ private:
 
 	// Strike state tracking (for watchdog)
 	bool _strike_active{false};
+
+	// Time the strike was commanded. The watchdog must not fire until Commander
+	// has had a chance to complete the mode switch, otherwise a strike can
+	// self-abort within one 100 ms tick of being requested.
+	hrt_abstime _strike_requested_time{0};
+	static constexpr hrt_abstime STRIKE_MODE_GRACE_US = 1_s;
+
+	// Target retained in GEODETIC form. vehicle_local_position is re-referenced
+	// on an EKF reset, which silently invalidates any previously computed NED
+	// target; keeping lat/lon lets us re-project instead of flying to a stale
+	// point. See the reset handling in Run().
+	// Last published target, retained so the active strike can be re-emitted
+	// as a heartbeat. strike_target was previously published only on the
+	// designation event, so the guidance had no way to tell a live target from
+	// one left over from a previous run.
+	strike_target_s _active_target{};
+
+	double _target_lat{0.0};
+	double _target_lon{0.0};
+	float  _target_alt{0.f};
+	uint8_t _last_xy_reset{0};
+	uint8_t _last_z_reset{0};
+
+	// Send the real command result. mavlink_receiver acks 31010 optimistically
+	// before this module has run, so a failure here would otherwise be reported
+	// to the GCS as success.
+	void send_command_ack(const vehicle_command_s &cmd, uint8_t result);
 
 	// Helper: convert geodetic to local NED
 	bool global_to_local(double lat, double lon, float alt, matrix::Vector3f &ned);
@@ -139,7 +169,11 @@ private:
 		(ParamFloat<px4::params::STR_DIVE_ANG>)    _param_str_dive_ang,
 		(ParamFloat<px4::params::STR_SETTLE_T>)    _param_str_settle_t,
 		(ParamFloat<px4::params::STR_CRUISE_SPD>)  _param_str_cruise_spd,
-		(ParamFloat<px4::params::STR_DESCENT_ANG>) _param_str_descent_ang
+		(ParamFloat<px4::params::STR_DESCENT_ANG>) _param_str_descent_ang,
+		(ParamFloat<px4::params::STR_LOITER_RAD>)  _param_str_loiter_rad,
+		(ParamInt<px4::params::STR_MAX_ATTEMPT>)   _param_str_max_attempt,
+		(ParamFloat<px4::params::STR_DIVE_VNE>)    _param_str_dive_vne,
+		(ParamFloat<px4::params::STR_DIVE_PITCH>) _param_str_dive_pitch_lim
 	)
 
 };

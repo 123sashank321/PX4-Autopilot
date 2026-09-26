@@ -301,6 +301,19 @@ private:
 	uORB::Subscription				_vtol_vehicle_status_sub{ORB_ID(vtol_vehicle_status)};
 	uORB::Subscription				_strike_target_sub{ORB_ID(strike_target)};
 
+	/// nav_state the vehicle was in when STRIKE was entered, so an interrupted
+	/// mission can be resumed instead of being dropped unconditionally to LOITER.
+	uint8_t						_pre_strike_nav_state{vehicle_status_s::NAVIGATION_STATE_STRIKE};
+
+	/// designation_id of the strike_target last successfully used to enter
+	/// NAVIGATION_STATE_STRIKE. strike_target.active stays true (10 Hz
+	/// heartbeat) for as long as a strike is in progress, so without this a
+	/// failsafe-forced departure from STRIKE would be immediately re-entered
+	/// the instant the failsafe clears, with no new operator command. Only a
+	/// strike_target carrying a NEW designation_id (i.e. a fresh
+	/// MAV_CMD_USER_1) may resume it.
+	uint32_t					_last_accepted_strike_designation_id{0};
+
 	uORB::SubscriptionInterval				_parameter_update_sub{ORB_ID(parameter_update), 1_s};
 
 	uORB::SubscriptionMultiArray<telemetry_status_s>	_telemetry_status_subs{ORB_ID::telemetry_status};

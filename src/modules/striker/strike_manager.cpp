@@ -68,18 +68,79 @@ void StrikeManager::Run()
 		return;
 	}
 
-	// 1. Check for dynamic target updates (from ROS 2 or other modules)
+	// 1. Refresh STR_* parameters when the user changes them in the GCS.
+	if (_parameter_update_sub.updated()) {
+		parameter_update_s pupdate;
+		_parameter_update_sub.copy(&pupdate);
+		updateParams();
+	}
 
 
-	// 2. Watchdog for External Mode Changes (User pressed Hold/Pause)
+	// 2. Heartbeat. strike_target was previously published only on the
+	//    designation event, so a target left over from an earlier run looked
+	//    identical to a live one. Re-emitting it each cycle gives the guidance
+	//    a timestamp it can actually test for staleness.
+	if (_strike_active) {
+		_active_target.timestamp = hrt_absolute_time();
+		_strike_target_pub.publish(_active_target);
+	}
+
+	// 3. EKF reset handling.
+	//    vehicle_local_position is re-referenced on a position reset, so a NED
+	//    target computed before the reset now points somewhere else. Re-project
+	//    from the retained lat/lon rather than flying to a stale point.
+	if (_strike_active) {
+		vehicle_local_position_s lp;
+
+		if (_local_pos_sub.copy(&lp)) {
+			if (lp.xy_reset_counter != _last_xy_reset || lp.z_reset_counter != _last_z_reset) {
+				_last_xy_reset = lp.xy_reset_counter;
+				_last_z_reset  = lp.z_reset_counter;
+
+				matrix::Vector3f target_ned;
+
+				if (global_to_local(_target_lat, _target_lon, _target_alt, target_ned)) {
+					strike_target_s msg{};
+					msg.timestamp = hrt_absolute_time();
+					msg.action_type = strike_target_s::ACTION_STRIKE;
+					msg.active = true;
+					msg.x = target_ned(0);
+					msg.y = target_ned(1);
+					msg.z = target_ned(2);
+					compute_geometry(target_ned, matrix::Vector3f(lp.x, lp.y, lp.z), msg);
+					msg.designation_id = _active_target.designation_id;  // preserve — not a new command
+					_active_target = msg;
+					_strike_target_pub.publish(msg);
+					PX4_WARN("EKF reset (xy=%u z=%u): strike target re-projected",
+						 (unsigned)lp.xy_reset_counter, (unsigned)lp.z_reset_counter);
+
+				} else {
+					PX4_ERR("EKF reset and no global reference: aborting strike");
+					_strike_active = false;
+					strike_target_s abort_msg{};
+					abort_msg.timestamp = hrt_absolute_time();
+					abort_msg.active = false;
+					abort_msg.action_type = strike_target_s::ACTION_ABORT;
+					_strike_target_pub.publish(abort_msg);
+				}
+			}
+		}
+	}
+
+	// 4. Watchdog for External Mode Changes (User pressed Hold/Pause)
 	vehicle_status_s status;
+
 	if (_vehicle_status_sub.updated()) {
 		if (_vehicle_status_sub.copy(&status)) {
 
 			// If we think we are striking, but the system is NOT in Strike mode,
 			// it means the user or system has switched modes (e.g. to Loiter, RTL, or Stick Override).
 			// We must update our internal state and notify listeners.
-			if (_strike_active && status.nav_state != vehicle_status_s::NAVIGATION_STATE_STRIKE) {
+			const bool grace_elapsed =
+				(hrt_elapsed_time(&_strike_requested_time) > STRIKE_MODE_GRACE_US);
+
+			if (_strike_active && grace_elapsed
+			    && status.nav_state != vehicle_status_s::NAVIGATION_STATE_STRIKE) {
 				_strike_active = false;
 
 				strike_target_s abort_msg{};
@@ -96,8 +157,9 @@ void StrikeManager::Run()
 		}
 	}
 
-	// 3. Process vehicle commands (The main trigger)
+	// 5. Process vehicle commands (The main trigger)
 	vehicle_command_s vcmd{};
+
 	if (_vehicle_command_sub.update(&vcmd)) {
 		handle_vehicle_command(&vcmd);
 	}
@@ -133,12 +195,14 @@ void StrikeManager::handle_vehicle_command(const vehicle_command_s *vehicle_comm
 			_strike_active = false;
 
 			_strike_target_pub.publish(strike_target);
+			send_command_ack(*vehicle_command, vehicle_command_ack_s::VEHICLE_CMD_RESULT_ACCEPTED);
 
 			// Check if Param 5/6 (Lat/Lon) are provided for a Guided Abort
 			if (fabs(lat) > 0.000001 && fabs(lon) > 0.000001) {
 				// Get current altitude for debugging
 				vehicle_global_position_s global_pos;
 				float current_alt = 0.0f;
+
 				if (_global_pos_sub.copy(&global_pos)) {
 					current_alt = global_pos.alt;
 				}
@@ -191,25 +255,54 @@ void StrikeManager::handle_vehicle_command(const vehicle_command_s *vehicle_comm
 				// Compute IP / AHP and fill geometry fields
 				compute_geometry(target_ned, vehicle_ned, strike_target);
 
+				// New designation — a fresh id lets Commander tell this apart
+				// from a heartbeat/reset-reprojection republish of a strike it
+				// has already flown and departed from (see Commander.cpp).
+				strike_target.designation_id = _strike_target_count + 1;
+
+				// Retain the geodetic target so it can be re-projected after an
+				// EKF reset, and latch the reset counters we are consistent with.
+				_target_lat = lat;
+				_target_lon = lon;
+				_target_alt = alt;
+				_last_xy_reset = local_pos.xy_reset_counter;
+				_last_z_reset  = local_pos.z_reset_counter;
+
+				_strike_requested_time = hrt_absolute_time();
 				_strike_active = true;
+				_active_target = strike_target;
 				_strike_target_pub.publish(strike_target);
 				_strike_target_count++;
 
+				send_command_ack(*vehicle_command, vehicle_command_ack_s::VEHICLE_CMD_RESULT_ACCEPTED);
 				mavlink_log_info(&_mavlink_log_pub, "STRIKE: %.4f, %.4f @ %.0fm", lat, lon,
 						 static_cast<double>(alt));
 				PX4_INFO("STRIKE target #%u: x=%.1f y=%.1f z=%.1f | IP=(%.1f,%.1f) AHP=(%.1f,%.1f) xk=%.1fm",
 					 (unsigned)_strike_target_count,
 					 (double)target_ned(0), (double)target_ned(1), (double)target_ned(2),
-					 (double)strike_target.ip_x,  (double)strike_target.ip_y,
+					 (double)strike_target.ip_x, (double)strike_target.ip_y,
 					 (double)strike_target.ahp_x, (double)strike_target.ahp_y,
 					 (double)strike_target.x_kinematic);
+
 			} else {
-				mavlink_log_critical(&_mavlink_log_pub, "Strike Failed: Invalid Home Position");
+				send_command_ack(*vehicle_command, vehicle_command_ack_s::VEHICLE_CMD_RESULT_TEMPORARILY_REJECTED);
+				mavlink_log_critical(&_mavlink_log_pub, "Strike Failed: no global position reference");
 			}
 		}
 	}
 }
 
+
+void StrikeManager::send_command_ack(const vehicle_command_s &cmd, uint8_t result)
+{
+	vehicle_command_ack_s ack{};
+	ack.timestamp = hrt_absolute_time();
+	ack.command = cmd.command;
+	ack.result = result;
+	ack.target_system = cmd.source_system;
+	ack.target_component = cmd.source_component;
+	_command_ack_pub.publish(ack);
+}
 
 int StrikeManager::print_status()
 {
@@ -224,30 +317,36 @@ int StrikeManager::custom_command(int argc, char *argv[])
 
 bool StrikeManager::global_to_local(double lat, double lon, float alt, matrix::Vector3f &ned)
 {
-	home_position_s home;
+	vehicle_local_position_s local_pos;
 
-	if (_home_position_sub.copy(&home) && home.valid_lpos) {
-		MapProjection map_ref(home.lat, home.lon);
-		float x, y;
-		map_ref.project(lat, lon, x, y);
-
-		// If alt=0 was sent (common for "ground strike" with omitted altitude),
-		// treat as ground level = home.alt so NED z = 0 (not -950m underground).
-		// Without this: z = -(0 - 950) = +950  →  target 950m underground
-		//   → R[2] ≈ 1050m, elevation angle -51° → pitch always saturated at -45°.
-		const float target_amsl = (alt < 1.0f) ? static_cast<float>(home.alt) : alt;
-		const float z = -(target_amsl - static_cast<float>(home.alt));
-
-		ned = matrix::Vector3f(x, y, z);
-		return true;
+	// The target must be expressed in the SAME frame the guidance consumes.
+	// StrikeGuidance works entirely in vehicle_local_position, whose origin is
+	// the EKF reference (ref_lat/ref_lon/ref_alt) - NOT home_position. Home is
+	// set at arming and can be moved later by DO_SET_HOME, so projecting the
+	// target against home places it in a different frame from the vehicle and
+	// offsets it by the home-to-origin delta, laterally and vertically.
+	// SITL usually hides this because the two happen to coincide.
+	if (!_local_pos_sub.copy(&local_pos) || !local_pos.xy_global || !local_pos.z_global) {
+		return false;
 	}
 
-	return false;
+	MapProjection map_ref(local_pos.ref_lat, local_pos.ref_lon);
+	float x, y;
+	map_ref.project(lat, lon, x, y);
+
+	// alt = 0 is the common "ground strike, altitude omitted" case from a GCS.
+	// Treat it as the local origin altitude so NED z = 0, rather than several
+	// hundred metres underground (which would saturate the terminal pitch).
+	const float target_amsl = (alt < 1.0f) ? local_pos.ref_alt : alt;
+	const float z = -(target_amsl - local_pos.ref_alt);
+
+	ned = matrix::Vector3f(x, y, z);
+	return true;
 }
 
 void StrikeManager::compute_geometry(const matrix::Vector3f &target_ned,
-				      const matrix::Vector3f &vehicle_ned,
-				      strike_target_s &msg)
+				     const matrix::Vector3f &vehicle_ned,
+				     strike_target_s &msg)
 {
 	// --- Parameters ---
 	const float ip_alt_agl  = _param_str_ip_alt.get();                    // [m] AGL
@@ -277,6 +376,7 @@ void StrikeManager::compute_geometry(const matrix::Vector3f &target_ned,
 
 	if (approach_mag < 1.0f) {
 		approach = matrix::Vector2f(1.0f, 0.0f);  // default North if directly overhead
+
 	} else {
 		approach = approach / approach_mag;
 	}
@@ -295,6 +395,16 @@ void StrikeManager::compute_geometry(const matrix::Vector3f &target_ned,
 	msg.ahp_z = ip_z;
 
 	msg.x_kinematic = x_kinematic;
+
+	// Snapshot the flight profile so the guidance flies the same numbers this
+	// geometry was computed with. x_buffer above assumes the vehicle actually
+	// cruises at STR_CRUISE_SPD, which only holds if it is commanded.
+	msg.cruise_speed  = cruise_spd;
+	msg.descent_angle = math::radians(_param_str_descent_ang.get());
+	msg.loiter_radius = _param_str_loiter_rad.get();
+	msg.max_attempts  = static_cast<uint8_t>(_param_str_max_attempt.get());
+	msg.dive_vne       = _param_str_dive_vne.get();
+	msg.dive_pitch_lim = math::radians(_param_str_dive_pitch_lim.get());
 }
 
 
