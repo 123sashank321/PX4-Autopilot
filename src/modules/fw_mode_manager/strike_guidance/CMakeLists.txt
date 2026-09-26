@@ -42,3 +42,12 @@ target_link_libraries(strike_guidance
 )
 
 target_include_directories(strike_guidance PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+
+
+# strike_guidance publishes/subscribes real uORB topics (strike_target) and
+# uses PX4_INFO/WARN/ERR logging, so it needs the fuller in-process runtime
+# (uORB manager, work queues, MODULE_NAME for the log macros) that
+# px4_add_functional_gtest links in — px4_add_unit_gtest only links LINKLIBS
+# and is for pure-computation libraries with no middleware footprint (e.g.
+# npfg). Same pattern as manual_control's ManualControlTest.cpp.
+px4_add_functional_gtest(SRC StrikeGuidanceTest.cpp LINKLIBS strike_guidance)

@@ -751,11 +751,11 @@ void MavlinkReceiver::handle_message_command_both(mavlink_message_t *msg, const 
 		}
 
 		if (cmd_mavlink.command == 31010) {  // MAV_CMD_USER_1 - Strike command
-			// Forward to strike module
+			// Forward to the striker module, which sends the ack itself once it
+			// knows whether the target could actually be accepted. Acking
+			// ACCEPTED here would report success even when striker then fails
+			// (e.g. no global position reference).
 			_cmd_pub.publish(vehicle_command);
-			// Send immediate acknowledgment to prevent "Command Not Supported" errors in QGC
-			send_ack = true;
-			result = vehicle_command_ack_s::VEHICLE_CMD_RESULT_ACCEPTED;
 
 		} else if (!send_ack) {
 			_cmd_pub.publish(vehicle_command);

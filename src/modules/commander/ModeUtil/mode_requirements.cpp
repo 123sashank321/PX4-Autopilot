@@ -214,6 +214,20 @@ void getModeRequirements(uint8_t vehicle_type, failsafe_flags_s &flags)
 		setRequirement(vehicle_status_s::NAVIGATION_STATE_AUTO_VTOL_TAKEOFF, flags.mode_req_local_position);
 	}
 
+	// NAVIGATION_STATE_STRIKE
+	// Strict (accuracy-gated) position, not the _relaxed variant other FW auto
+	// modes use — the guidance dives onto a specific designated point, so a
+	// degraded position estimate is a mode-exit condition here, not just a
+	// warning. No mode_req_home_position: strike_manager projects the target
+	// against the EKF reference (local_pos.ref_lat/lon/alt), not home, so
+	// requiring home would be inconsistent with the module's own frame.
+	setRequirement(vehicle_status_s::NAVIGATION_STATE_STRIKE, flags.mode_req_angular_velocity);
+	setRequirement(vehicle_status_s::NAVIGATION_STATE_STRIKE, flags.mode_req_attitude);
+	setRequirement(vehicle_status_s::NAVIGATION_STATE_STRIKE, flags.mode_req_global_position);
+	setRequirement(vehicle_status_s::NAVIGATION_STATE_STRIKE, flags.mode_req_local_position);
+	setRequirement(vehicle_status_s::NAVIGATION_STATE_STRIKE, flags.mode_req_local_alt);
+	setRequirement(vehicle_status_s::NAVIGATION_STATE_STRIKE, flags.mode_req_prevent_arming);
+
 	// NAVIGATION_STATE_EXTERNALx: handled outside
 
 	static_assert(vehicle_status_s::NAVIGATION_STATE_MAX == 31, "update mode requirements");

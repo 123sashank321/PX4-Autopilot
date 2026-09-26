@@ -2137,6 +2137,19 @@ FixedWingModeManager::Run()
 
 		set_control_mode_current(now);
 
+		// StrikeGuidance only runs while in STRIKE, so it never sees the target
+		// go away when the mode is left some other way (RC mode switch, failsafe,
+		// VTOL back-transition). Without this, a strike interrupted mid-dive left
+		// the guidance in TERMINAL and the next designation dove straight at its
+		// target, skipping INGRESS/ALIGNMENT.
+		const bool strike_mode = (_control_mode_current == FW_POSCTRL_MODE_STRIKE);
+
+		if (strike_mode != _was_strike_mode) {
+			_strike_guidance.reset();
+			_strike_hold_altitude = NAN;
+			_was_strike_mode = strike_mode;
+		}
+
 		update_in_air_states(now);
 
 		// restore nominal TECS parameters in case changed intermittently (e.g. in landing handling)
@@ -2218,7 +2231,7 @@ FixedWingModeManager::Run()
 			}
 
 		case FW_POSCTRL_MODE_STRIKE: {
-				control_strike(control_interval);
+				control_strike();
 				break;
 			}
 
@@ -2752,14 +2765,27 @@ lateral-longitudinal controller and and controllers below that (attitude, rate).
 }
 
 void
-FixedWingModeManager::control_strike(const float control_interval)
+FixedWingModeManager::control_strike()
 {
-	const StrikeGuidance::Output out = _strike_guidance.compute(
-		_local_pos, _yaw, _pitch,
-		_airspeed_valid, _airspeed_eas,
-		_param_fw_airspd_max.get());
-
 	const hrt_abstime now = hrt_absolute_time();
+
+	const StrikeGuidance::Output out = _strike_guidance.compute(
+		now, _local_pos, _pitch,
+		_airspeed_valid, _airspeed_eas,
+		_param_fw_airspd_max.get(),
+		math::radians(_param_fw_r_lim.get()),
+		math::radians(_param_fw_p_lim_min.get()),
+		math::radians(_param_fw_p_lim_max.get()));
+
+	// When guidance reports invalid we hold altitude. Latch it on the
+	// transition rather than re-reading _current_altitude every cycle, which
+	// tracks the aircraft down instead of holding it level.
+	if (out.valid) {
+		_strike_hold_altitude = NAN;
+
+	} else if (!PX4_ISFINITE(_strike_hold_altitude)) {
+		_strike_hold_altitude = _current_altitude;
+	}
 
 	// ── Lateral setpoint ─────────────────────────────────────────────────────
 	fixed_wing_lateral_setpoint_s lat_sp{empty_lateral_control_setpoint};
@@ -2773,7 +2799,7 @@ FixedWingModeManager::control_strike(const float control_interval)
 
 		const DirectionalGuidanceOutput npfg_out = navigateLoiter(
 			ip_local, vehicle_pos,
-			StrikeGuidance::LOITER_RADIUS,
+			out.loiter_radius,   // STR_LOITER_RAD, carried in the target message
 			true, // CCW
 			ground_speed, _wind_vel);
 
@@ -2793,9 +2819,9 @@ FixedWingModeManager::control_strike(const float control_interval)
 	// TERMINAL: pitch_direct + throttle_direct (TECS fully bypassed)
 	const fixed_wing_longitudinal_setpoint_s long_sp = {
 		.timestamp           = now,
-		.altitude            = out.valid ? out.altitude : _current_altitude,
+		.altitude            = out.valid ? out.altitude : _strike_hold_altitude,
 		.height_rate         = NAN,
-		.equivalent_airspeed = NAN,
+		.equivalent_airspeed = out.valid ? out.airspeed : NAN,
 		.pitch_direct        = out.pitch_direct,
 		.throttle_direct     = out.throttle_direct
 	};
