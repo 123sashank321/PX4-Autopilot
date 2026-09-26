@@ -1864,19 +1864,72 @@ void Commander::run()
 
 		// Check for active Strike
 		strike_target_s strike_target;
+
 		if (_strike_target_sub.copy(&strike_target)) {
-			if (strike_target.active && (strike_target.action_type == 0)) {
-				// Strike is active, switch to Strike nav_state
+			if (strike_target.active && (strike_target.action_type == 0)
+			    && !_vehicle_status.in_transition_mode
+			    && (_vehicle_status.vehicle_type == vehicle_status_s::VEHICLE_TYPE_FIXED_WING)) {
+				// Strike is active, switch to Strike nav_state.
+				// The vehicle_type check is a no-op for a plain fixed-wing
+				// (always FIXED_WING) and is what actually matters for a
+				// VTOL: without it, a strike commanded while the vehicle is
+				// still in steady rotary-wing hover would pass the
+				// transition check below, switch nav_state to STRIKE, and
+				// then just sit there — FixedWingModeManager::set_control_mode_current()
+				// no-ops to FW_POSCTRL_MODE_OTHER for ROTARY_WING outside a
+				// transition, and nothing here commands a front-transition,
+				// so the strike would never actually execute.
 				if (_vehicle_status.nav_state != vehicle_status_s::NAVIGATION_STATE_STRIKE) {
-					_user_mode_intention.change(vehicle_status_s::NAVIGATION_STATE_STRIKE,
-						ModeChangeSource::User);
-					PX4_INFO("Strike activated, switching to NAVIGATION_STATE_STRIKE");
+
+					// strike_target.active stays true via a 10 Hz heartbeat for as
+					// long as the strike is in progress. Without this check, a
+					// failsafe-forced departure from STRIKE (e.g. a brief RC
+					// glitch) would be re-entered the instant the failsafe clears,
+					// with no new operator command — only a strike_target carrying
+					// a NEW designation_id (a fresh MAV_CMD_USER_1) may (re-)enter.
+					// Departed-after-success stays blocked; an initial-entry
+					// rejection (mode transiently unavailable at command time)
+					// still retries every cycle, since designation_id is only
+					// latched below on success.
+					if (strike_target.designation_id != _last_accepted_strike_designation_id) {
+						// Remember what we are interrupting so it can be resumed.
+						_pre_strike_nav_state = _vehicle_status.nav_state;
+
+						// The result MUST be checked: a rejected change (mode not
+						// available, failsafe active) previously still logged
+						// success, and the striker watchdog then aborted a second
+						// later with no indication of the real cause.
+						if (_user_mode_intention.change(vehicle_status_s::NAVIGATION_STATE_STRIKE,
+										ModeChangeSource::User)) {
+							_last_accepted_strike_designation_id = strike_target.designation_id;
+							PX4_INFO("Strike activated, switching to NAVIGATION_STATE_STRIKE");
+
+						} else {
+							PX4_ERR("Strike REJECTED: could not enter NAVIGATION_STATE_STRIKE");
+							mavlink_log_critical(&_mavlink_log_pub,
+									     "Strike rejected: mode unavailable");
+						}
+					}
 				}
+
 			} else if (_vehicle_status.nav_state == vehicle_status_s::NAVIGATION_STATE_STRIKE) {
-				// Strike was deactivated or aborted, return to loiter
-				_user_mode_intention.change(vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER,
-					ModeChangeSource::User);
-				PX4_INFO("Strike deactivated, switching to AUTO_LOITER");
+				// Strike ended. Return to whatever the vehicle was doing before
+				// it was interrupted - unconditionally dropping to LOITER
+				// silently abandoned an in-progress mission, since a strike
+				// commanded from a mission item never resumed it.
+				const uint8_t resume_state =
+					(_pre_strike_nav_state != vehicle_status_s::NAVIGATION_STATE_STRIKE)
+					? _pre_strike_nav_state
+					: vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER;
+
+				if (!_user_mode_intention.change(resume_state, ModeChangeSource::User)) {
+					PX4_ERR("Strike ended but could not restore nav_state %d", resume_state);
+
+				} else {
+					PX4_INFO("Strike deactivated, restoring nav_state %d", resume_state);
+				}
+
+				_pre_strike_nav_state = vehicle_status_s::NAVIGATION_STATE_STRIKE;
 			}
 		}
 
